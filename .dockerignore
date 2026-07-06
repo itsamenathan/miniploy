@@ -1,0 +1,26 @@
+.git
+.github
+.gitignore
+Dockerfile
+compose.example.yml
+README.md
+
+# Local/runtime data
+/data
+data
+*.tmp
+.env
+.env.*
+deploy-key
+*_key
+*.pem
+*.key
+
+# Build/test output
+/miniploy
+/bin
+/dist
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
