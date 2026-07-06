@@ -6,6 +6,6 @@ COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/miniploy ./cmd/miniploy
 
 FROM alpine:3.22
-RUN apk add --no-cache git openssh-client docker-cli docker-cli-compose ca-certificates
+RUN apk add --no-cache git openssh-client docker-cli docker-cli-compose docker-cli-buildx ca-certificates
 COPY --from=build /out/miniploy /usr/local/bin/miniploy
 ENTRYPOINT ["/usr/local/bin/miniploy"]

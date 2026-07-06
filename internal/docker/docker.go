@@ -18,7 +18,7 @@ type Client struct {
 }
 
 func New(cfg config.Config, log *slog.Logger) Client {
-	return Client{cfg: cfg, run: runner.Runner{Log: log}}
+	return Client{cfg: cfg, run: runner.Runner{Log: log, Env: []string{"DOCKER_BUILDKIT=1", "BUILDKIT_PROGRESS=plain"}}}
 }
 
 func (c Client) Validate(ctx context.Context) error {
