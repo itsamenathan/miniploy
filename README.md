@@ -2,7 +2,7 @@
 
 `miniploy` is a small Go utility container for one Git repo -> one Docker image -> one Docker Compose service.
 
-It clones a repo, checks the target branch for new commits, builds the repo Dockerfile, tags the image with a stable tag plus the commit SHA, and asks Docker Compose to recreate the managed service.
+It clones a repo, checks the target branch for new commits, builds the repo Dockerfile, tags the image with a stable tag plus the commit SHA, and asks Docker Compose to recreate the managed service. It also tracks the configured Compose file and redeploys the service when that file changes, even if the Git commit is unchanged.
 
 ## Quick start
 
@@ -56,6 +56,27 @@ BuildKit is enabled for builds so Dockerfiles using `RUN --mount=type=cache` wor
 | `COMPOSE_SERVICE` | yes | | Service to recreate after a successful build. |
 | `COMPOSE_PROFILE` | no | | Compose profile to enable when validating/redeploying the service. Recommended for the managed app. |
 | `REDEPLOY_ARGS` | no | `--no-deps --force-recreate` | Extra args passed after `docker compose up -d`. |
+
+Miniploy runs Docker Compose from inside the miniploy container. That means `COMPOSE_FILE` is a container path, not necessarily the path on your host. The common pattern is to mount the directory containing your Compose file at `/compose`:
+
+```yaml
+services:
+  miniploy:
+    volumes:
+      - ./:/compose:ro
+    environment:
+      COMPOSE_FILE: /compose/docker-compose.yml
+```
+
+With that mount, a host file at `./docker-compose.yml` is visible inside miniploy as `/compose/docker-compose.yml`, which is why that is the default.
+
+Miniploy needs the Compose file because it does not manually create the app container. It lets Compose recreate the service so Compose remains responsible for ports, networks, volumes, environment variables, restart policies, and healthchecks.
+
+Miniploy stores a hash of `COMPOSE_FILE` in its state. On each poll, if the Compose file content changed but the Git commit did not, miniploy validates the Compose config and runs `docker compose up -d ... "$COMPOSE_SERVICE"` without rebuilding the image.
+
+`COMPOSE_PROJECT_NAME` should be explicit and should match the stack you want miniploy to manage. Without a stable project name, Compose may infer different names depending on the working directory and accidentally create duplicate containers, networks, or volumes.
+
+`COMPOSE_SERVICE` is the service to recreate after a successful image build. `COMPOSE_PROFILE` is needed when that service is hidden behind a profile, which is recommended to avoid first-boot failures before the image exists.
 
 After a successful build, miniploy runs roughly:
 

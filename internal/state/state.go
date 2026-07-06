@@ -18,6 +18,7 @@ type State struct {
 	LastDeployedCommit  string    `json:"lastDeployedCommit"`
 	LastSuccessfulImage string    `json:"lastSuccessfulImage"`
 	LastAttemptedCommit string    `json:"lastAttemptedCommit"`
+	LastComposeHash     string    `json:"lastComposeHash"`
 	LastStatus          string    `json:"lastStatus"`
 	Builds              []Build   `json:"builds"`
 	Updated             time.Time `json:"updated"`
@@ -64,10 +65,23 @@ func (s *State) RecordFailure(commit string) {
 	s.LastStatus = "failed"
 }
 
-func (s *State) RecordSuccess(commit, image string, keep int) {
+func (s *State) RecordRedeployAttempt(commit string) {
+	s.LastAttemptedCommit = commit
+	s.LastStatus = "redeploying"
+}
+
+func (s *State) RecordRedeploySuccess(commit, composeHash string) {
+	s.LastAttemptedCommit = commit
+	s.LastDeployedCommit = commit
+	s.LastComposeHash = composeHash
+	s.LastStatus = "success"
+}
+
+func (s *State) RecordSuccess(commit, image, composeHash string, keep int) {
 	s.LastAttemptedCommit = commit
 	s.LastDeployedCommit = commit
 	s.LastSuccessfulImage = image
+	s.LastComposeHash = composeHash
 	s.LastStatus = "success"
 	s.Builds = append([]Build{{Commit: commit, Image: image, Deployed: time.Now().UTC()}}, s.Builds...)
 	seen := map[string]bool{}

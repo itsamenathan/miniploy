@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -71,19 +72,46 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		return fmt.Errorf("check remote commit: %w", err)
 	}
 
-	changed := remoteCommit != st.LastDeployedCommit
+	composeHash, err := r.composeFileHash()
+	if err != nil {
+		return fmt.Errorf("hash compose file: %w", err)
+	}
+
+	commitChanged := remoteCommit != st.LastDeployedCommit
+	composeChanged := composeHash != st.LastComposeHash
 	startupEnsure := reason == "startup" && r.cfg.DeployOnStart
-	if !changed && !startupEnsure {
-		r.log.Info("no changes detected", "commit", docker.ShortCommit(remoteCommit))
+	if !commitChanged && !composeChanged && !startupEnsure {
+		r.log.Info("no changes detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 		return nil
 	}
 
-	if !changed && startupEnsure {
-		r.log.Info("ensuring service is running on startup", "commit", docker.ShortCommit(remoteCommit))
-		return r.compose.Up(ctx)
+	if !commitChanged {
+		if composeChanged {
+			r.log.Info("compose file change detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash), "previous_compose_hash", shortHash(st.LastComposeHash))
+		} else {
+			r.log.Info("ensuring service is running on startup", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+		}
+		st.RecordRedeployAttempt(remoteCommit)
+		_ = state.Save(r.cfg.StatePath, st)
+		if err := r.compose.Validate(ctx); err != nil {
+			st.RecordFailure(remoteCommit)
+			_ = state.Save(r.cfg.StatePath, st)
+			return fmt.Errorf("compose config invalid: %w", err)
+		}
+		if err := r.compose.Up(ctx); err != nil {
+			st.RecordFailure(remoteCommit)
+			_ = state.Save(r.cfg.StatePath, st)
+			return fmt.Errorf("redeploy compose service: %w", err)
+		}
+		st.RecordRedeploySuccess(remoteCommit, composeHash)
+		if err := state.Save(r.cfg.StatePath, st); err != nil {
+			return fmt.Errorf("save state: %w", err)
+		}
+		r.log.Info("redeploy successful", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+		return nil
 	}
 
-	r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit))
+	r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
 	st.RecordAttempt(remoteCommit)
 	_ = state.Save(r.cfg.StatePath, st)
 
@@ -91,6 +119,12 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		st.RecordFailure(remoteCommit)
 		_ = state.Save(r.cfg.StatePath, st)
 		return fmt.Errorf("checkout: %w", err)
+	}
+	composeHash, err = r.composeFileHash()
+	if err != nil {
+		st.RecordFailure(remoteCommit)
+		_ = state.Save(r.cfg.StatePath, st)
+		return fmt.Errorf("hash compose file: %w", err)
 	}
 	if err := r.requireDockerfile(); err != nil {
 		st.RecordFailure(remoteCommit)
@@ -104,13 +138,18 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		_ = state.Save(r.cfg.StatePath, st)
 		return fmt.Errorf("build image: %w", err)
 	}
+	if err := r.compose.Validate(ctx); err != nil {
+		st.RecordFailure(remoteCommit)
+		_ = state.Save(r.cfg.StatePath, st)
+		return fmt.Errorf("compose config invalid: %w", err)
+	}
 	if err := r.compose.Up(ctx); err != nil {
 		st.RecordFailure(remoteCommit)
 		_ = state.Save(r.cfg.StatePath, st)
 		return fmt.Errorf("redeploy compose service: %w", err)
 	}
 
-	st.RecordSuccess(remoteCommit, commitImage, r.cfg.KeepBuilds)
+	st.RecordSuccess(remoteCommit, commitImage, composeHash, r.cfg.KeepBuilds)
 	if err := state.Save(r.cfg.StatePath, st); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
@@ -131,4 +170,20 @@ func (r *Runner) requireDockerfile() error {
 		return fmt.Errorf("dockerfile path is a directory: %s", path)
 	}
 	return nil
+}
+
+func (r *Runner) composeFileHash() (string, error) {
+	contents, err := os.ReadFile(r.cfg.ComposeFile)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(contents)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func shortHash(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
 }
