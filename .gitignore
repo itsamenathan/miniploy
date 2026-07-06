@@ -1,0 +1,41 @@
+# Build outputs
+miniploy
+*.exe
+*.out
+*.test
+
+# Runtime data
+/data/
+data/
+*.tmp
+
+# Go workspace/cache artifacts
+/bin/
+/dist/
+/vendor/
+
+# Coverage/profiling
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
+deploy-key
+*_key
+*.pem
+*.key
+
+# Docker/Compose local overrides
+docker-compose.override.yml
+compose.override.yml
+
+# Editor/OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

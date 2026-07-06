@@ -1,0 +1,55 @@
+package compose
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+
+	"github.com/itsamenathan/miniploy/internal/config"
+	"github.com/itsamenathan/miniploy/internal/runner"
+)
+
+type Client struct {
+	cfg config.Config
+	run runner.Runner
+	log *slog.Logger
+}
+
+func New(cfg config.Config, log *slog.Logger) Client {
+	return Client{cfg: cfg, run: runner.Runner{Log: log}, log: log}
+}
+
+func (c Client) Validate(ctx context.Context) error {
+	if _, err := os.Stat(c.cfg.ComposeFile); err != nil {
+		return err
+	}
+	args := []string{"compose", "-f", c.cfg.ComposeFile, "-p", c.cfg.ComposeProjectName}
+	if c.cfg.ComposeProfile != "" {
+		args = append(args, "--profile", c.cfg.ComposeProfile)
+	}
+	args = append(args, "config", "--services")
+	out, err := c.run.Output(ctx, "docker", args...)
+	if err != nil {
+		return err
+	}
+	for _, service := range strings.Fields(out) {
+		if service == c.cfg.ComposeService {
+			return nil
+		}
+	}
+	return fmt.Errorf("compose service %q not found in %s", c.cfg.ComposeService, c.cfg.ComposeFile)
+}
+
+func (c Client) Up(ctx context.Context) error {
+	args := []string{"compose", "-f", c.cfg.ComposeFile, "-p", c.cfg.ComposeProjectName}
+	if c.cfg.ComposeProfile != "" {
+		args = append(args, "--profile", c.cfg.ComposeProfile)
+	}
+	args = append(args, "up", "-d")
+	args = append(args, c.cfg.RedeployArgs...)
+	args = append(args, c.cfg.ComposeService)
+	c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))
+	return c.run.Run(ctx, "docker", args...)
+}

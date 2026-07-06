@@ -1,0 +1,49 @@
+services:
+  miniploy:
+    build: .
+    restart: unless-stopped
+    environment:
+      GIT_URL: git@github.com:your-org/private-app.git
+      GIT_BRANCH: main
+      GIT_AUTH_MODE: ssh
+      GIT_SSH_KEY_PATH: /run/secrets/git_ssh_key
+
+      IMAGE_NAME: private-app:live
+
+      COMPOSE_FILE: /compose/docker-compose.yml
+      COMPOSE_PROJECT_NAME: my-stack
+      COMPOSE_SERVICE: app
+      COMPOSE_PROFILE: app
+
+      CHECK_INTERVAL: 30
+      KEEP_BUILDS: 3
+      DEPLOY_ON_START: true
+      DATA_DIR: /data
+      LOG_LEVEL: info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/compose
+      - miniploy-data:/data
+    secrets:
+      - git_ssh_key
+
+  app:
+    profiles:
+      - app
+    image: private-app:live
+    restart: unless-stopped
+    networks:
+      - app_net
+    ports:
+      - "8080:8080"
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  miniploy-data:
+
+secrets:
+  git_ssh_key:
+    file: ./deploy-key
