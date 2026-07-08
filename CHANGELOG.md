@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add CI workflow that runs the mise `check` task on pushes and pull requests.
+- Add GitHub Release workflow that publishes tag releases using matching `CHANGELOG.md` release notes.
+- Add release preparation script and `mise run release -- vX.Y.Z` task for changelog updates, release commits, and annotated tags.
 - Add local health/status HTTP server, enabled by default on `127.0.0.1:8080`.
 - Add `GET /healthz` for cheap liveness checks.
 - Add `GET /readyz` for state writability plus Docker/Compose readiness checks.

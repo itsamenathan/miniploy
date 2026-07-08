@@ -160,6 +160,29 @@ When `HEALTH_ENABLED=true`, miniploy serves local HTTP endpoints on `HEALTH_ADDR
 
 The Docker image uses `/healthz` rather than `/readyz` so transient Docker or Compose issues do not cause Docker to restart miniploy in a loop. Bind `HEALTH_ADDR` to a private interface and publish the port only if you want external monitoring to read these endpoints. If `HEALTH_ENABLED=false`, `miniployctl health` exits successfully so intentionally disabling the HTTP server does not make the container unhealthy.
 
+## Release process
+
+Development checks are defined in `mise.toml`:
+
+```bash
+mise run check
+```
+
+To prepare a release, add notes under `## [Unreleased]` in `CHANGELOG.md`, then run:
+
+```bash
+mise run release -- v0.1.1
+```
+
+The release task moves the changelog notes into a dated version section, commits the changelog update, and creates an annotated tag. Push both the branch and tag:
+
+```bash
+git push origin main
+git push origin v0.1.1
+```
+
+Tag pushes matching `v*.*.*` build and publish versioned Docker images to GHCR. The GitHub Release workflow creates release notes from the matching changelog section.
+
 ## Safety
 
 - Failed builds do not update deploy state, so the old app keeps running.

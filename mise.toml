@@ -26,3 +26,7 @@ run = [
   "go vet ./...",
   "golangci-lint run",
 ]
+
+[tasks.release]
+description = "Prepare a release from CHANGELOG.md, commit it, and create an annotated tag"
+run = "scripts/release.sh"
