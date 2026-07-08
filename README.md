@@ -27,6 +27,7 @@ You can control the managed app through `miniployctl` from inside the miniploy c
 
 ```bash
 docker compose exec miniploy miniployctl status
+docker compose exec miniploy miniployctl health
 docker compose exec miniploy miniployctl logs -f
 docker compose exec miniploy miniployctl redeploy
 docker compose exec miniploy miniployctl rebuild
@@ -114,6 +115,7 @@ The image includes `miniployctl`, a helper CLI that uses the same `COMPOSE_FILE`
 
 ```bash
 docker compose exec miniploy miniployctl status
+docker compose exec miniploy miniployctl health
 docker compose exec miniploy miniployctl ps
 docker compose exec miniploy miniployctl logs -f
 docker compose exec miniploy miniployctl restart
@@ -130,7 +132,10 @@ docker compose exec miniploy miniployctl help
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `CHECK_INTERVAL` | no | `30` | Poll interval. Accepts seconds like `30` or Go durations like `5m`. |
+| `HEALTH_ENABLED` | no | `true` | Starts the local health/status HTTP server. |
+| `HEALTH_ADDR` | no | `127.0.0.1:8080` | Address for health/status endpoints. The default is reachable from inside the container for Docker healthchecks but is not exposed outside the container unless you publish the port. |
+| `CHECK_INTERVAL` | no | `5m` | Git/Compose check interval. Accepts seconds like `30` or Go durations like `5m`. Set to `0` to disable polling after the startup check. |
+| `DEPLOY_DELAY` | no | `0` | Optional debounce delay after a Git change is detected. Accepts seconds like `30` or Go durations like `30s`. Miniploy rechecks the branch after the delay and deploys the latest commit. |
 | `KEEP_BUILDS` | no | `3` | Number of successful commit-tagged images to retain in state/cleanup. Minimum `1`. |
 | `DEPLOY_ON_START` | no | `true` | If true, miniploy ensures the Compose service is up during startup when no new commit exists. |
 | `DATA_DIR` | no | `/data` | Persistent data directory for repo, state, lock, and prepared SSH key copies. |
@@ -138,6 +143,22 @@ docker compose exec miniploy miniployctl help
 | `STATE_PATH` | no | `$DATA_DIR/state.json` | Deploy state file path. |
 | `LOCK_DIR` | no | `$DATA_DIR/deploy.lock` | Lock directory used to prevent overlapping deploys. |
 | `LOG_LEVEL` | no | `info` | Log level: `debug`, `info`, `warn`, or `error`. |
+
+`CHECK_INTERVAL` controls how often miniploy checks the watched Git branch's remote commit and the mounted Compose file hash. Polls use a small jitter of ±10% so multiple miniploy instances that start together do not keep checking at exactly the same time. Use `30s` when you want fast personal/dev updates, `1m`-`5m` for normal use, and `10m` or more when running many services. Set `CHECK_INTERVAL=0` for manual-only operation after startup; you can still run `miniployctl rebuild` or `miniployctl redeploy` on demand.
+
+Miniploy logs the next scheduled Git/Compose check time at debug level before each sleep.
+
+`DEPLOY_DELAY` is useful when a branch often receives several pushes close together. When miniploy detects a Git commit change, it waits for the delay, rechecks the watched branch, and deploys the latest branch head. Force-pushes and rollbacks are also treated as normal commit changes because miniploy compares the watched branch head hash to the last deployed hash.
+
+### Health/status endpoints
+
+When `HEALTH_ENABLED=true`, miniploy serves local HTTP endpoints on `HEALTH_ADDR`:
+
+- `GET /healthz` returns cheap liveness status and is used by the image `HEALTHCHECK` through `miniployctl health`.
+- `GET /readyz` checks whether miniploy can currently operate, including state writability and Docker/Compose validation.
+- `GET /status` returns JSON config/state details similar to `miniployctl status`, including the last failure message when present.
+
+The Docker image uses `/healthz` rather than `/readyz` so transient Docker or Compose issues do not cause Docker to restart miniploy in a loop. Bind `HEALTH_ADDR` to a private interface and publish the port only if you want external monitoring to read these endpoints. If `HEALTH_ENABLED=false`, `miniployctl health` exits successfully so intentionally disabling the HTTP server does not make the container unhealthy.
 
 ## Safety
 

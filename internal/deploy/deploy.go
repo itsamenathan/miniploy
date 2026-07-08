@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/itsamenathan/miniploy/internal/compose"
 	"github.com/itsamenathan/miniploy/internal/config"
@@ -110,14 +111,16 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 		st.RecordRedeployAttempt(remoteCommit)
 		_ = state.Save(r.cfg.StatePath, st)
 		if err := r.compose.Validate(ctx); err != nil {
-			st.RecordFailure(remoteCommit)
+			failure := fmt.Errorf("compose config invalid: %w", err)
+			st.RecordFailure(remoteCommit, failure)
 			_ = state.Save(r.cfg.StatePath, st)
-			return fmt.Errorf("compose config invalid: %w", err)
+			return failure
 		}
 		if err := r.compose.Up(ctx); err != nil {
-			st.RecordFailure(remoteCommit)
+			failure := fmt.Errorf("redeploy compose service: %w", err)
+			st.RecordFailure(remoteCommit, failure)
 			_ = state.Save(r.cfg.StatePath, st)
-			return fmt.Errorf("redeploy compose service: %w", err)
+			return failure
 		}
 		st.RecordRedeploySuccess(remoteCommit, composeHash)
 		if err := state.Save(r.cfg.StatePath, st); err != nil {
@@ -131,42 +134,59 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 		r.log.Info("rebuild requested", "commit", docker.ShortCommit(remoteCommit), "compose_changed", composeChanged)
 	} else {
 		r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
+		debouncedCommit, debouncedComposeHash, err := r.debounce(ctx, remoteCommit, composeHash)
+		if err != nil {
+			st.RecordFailure(remoteCommit, err)
+			_ = state.Save(r.cfg.StatePath, st)
+			return err
+		}
+		remoteCommit = debouncedCommit
+		composeHash = debouncedComposeHash
+		if remoteCommit == st.LastDeployedCommit && composeHash == st.LastComposeHash {
+			r.log.Info("no changes detected after deploy delay", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+			return nil
+		}
 	}
 	st.RecordAttempt(remoteCommit)
 	_ = state.Save(r.cfg.StatePath, st)
 
 	if err := r.git.Checkout(ctx); err != nil {
-		st.RecordFailure(remoteCommit)
+		failure := fmt.Errorf("checkout: %w", err)
+		st.RecordFailure(remoteCommit, failure)
 		_ = state.Save(r.cfg.StatePath, st)
-		return fmt.Errorf("checkout: %w", err)
+		return failure
 	}
 	composeHash, err = r.composeFileHash()
 	if err != nil {
-		st.RecordFailure(remoteCommit)
+		failure := fmt.Errorf("hash compose file: %w", err)
+		st.RecordFailure(remoteCommit, failure)
 		_ = state.Save(r.cfg.StatePath, st)
-		return fmt.Errorf("hash compose file: %w", err)
+		return failure
 	}
 	if err := r.requireDockerfile(); err != nil {
-		st.RecordFailure(remoteCommit)
+		st.RecordFailure(remoteCommit, err)
 		_ = state.Save(r.cfg.StatePath, st)
 		return err
 	}
 
 	commitImage, err := r.docker.Build(ctx, remoteCommit)
 	if err != nil {
-		st.RecordFailure(remoteCommit)
+		failure := fmt.Errorf("build image: %w", err)
+		st.RecordFailure(remoteCommit, failure)
 		_ = state.Save(r.cfg.StatePath, st)
-		return fmt.Errorf("build image: %w", err)
+		return failure
 	}
 	if err := r.compose.Validate(ctx); err != nil {
-		st.RecordFailure(remoteCommit)
+		failure := fmt.Errorf("compose config invalid: %w", err)
+		st.RecordFailure(remoteCommit, failure)
 		_ = state.Save(r.cfg.StatePath, st)
-		return fmt.Errorf("compose config invalid: %w", err)
+		return failure
 	}
 	if err := r.compose.Up(ctx); err != nil {
-		st.RecordFailure(remoteCommit)
+		failure := fmt.Errorf("redeploy compose service: %w", err)
+		st.RecordFailure(remoteCommit, failure)
 		_ = state.Save(r.cfg.StatePath, st)
-		return fmt.Errorf("redeploy compose service: %w", err)
+		return failure
 	}
 
 	st.RecordSuccess(remoteCommit, commitImage, composeHash, r.cfg.KeepBuilds)
@@ -178,6 +198,34 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 	}
 	r.log.Info("deploy successful", "commit", docker.ShortCommit(remoteCommit), "image", commitImage)
 	return nil
+}
+
+func (r *Runner) debounce(ctx context.Context, commit, composeHash string) (string, string, error) {
+	if r.cfg.DeployDelay == 0 {
+		return commit, composeHash, nil
+	}
+
+	r.log.Info("waiting before deploy", "delay", r.cfg.DeployDelay.String(), "commit", docker.ShortCommit(commit))
+	timer := time.NewTimer(r.cfg.DeployDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	case <-timer.C:
+	}
+
+	latestCommit, err := r.git.RemoteCommit(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("recheck remote commit after deploy delay: %w", err)
+	}
+	latestComposeHash, err := r.composeFileHash()
+	if err != nil {
+		return "", "", fmt.Errorf("hash compose file after deploy delay: %w", err)
+	}
+	if latestCommit != commit || latestComposeHash != composeHash {
+		r.log.Info("deploy target updated during delay", "commit", docker.ShortCommit(latestCommit), "previous", docker.ShortCommit(commit), "compose_changed", latestComposeHash != composeHash)
+	}
+	return latestCommit, latestComposeHash, nil
 }
 
 func (r *Runner) requireDockerfile() error {

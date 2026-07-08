@@ -10,4 +10,6 @@ FROM alpine:3.22
 RUN apk add --no-cache git openssh-client docker-cli docker-cli-compose docker-cli-buildx ca-certificates
 COPY --from=build /out/miniploy /usr/local/bin/miniploy
 COPY --from=build /out/miniployctl /usr/local/bin/miniployctl
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD miniployctl health
 ENTRYPOINT ["/usr/local/bin/miniploy"]

@@ -1,0 +1,28 @@
+[tools]
+go = "1.24.13"
+golangci-lint = "2.12.2"
+
+[env]
+GOTOOLCHAIN = "local"
+
+[tasks.fmt]
+description = "Format Go sources"
+run = "gofmt -w cmd internal"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run"
+
+[tasks.check]
+description = "Run formatting, tests, race tests, vet, and lint"
+run = [
+  "gofmt -w cmd internal",
+  "go test ./...",
+  "go test -race ./...",
+  "go vet ./...",
+  "golangci-lint run",
+]

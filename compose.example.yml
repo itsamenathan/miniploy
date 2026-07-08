@@ -15,7 +15,7 @@ services:
       COMPOSE_SERVICE: app
       COMPOSE_PROFILE: app
 
-      CHECK_INTERVAL: 30
+      CHECK_INTERVAL: 5m
       KEEP_BUILDS: 3
       DEPLOY_ON_START: true
       DATA_DIR: /data

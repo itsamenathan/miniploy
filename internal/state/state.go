@@ -20,6 +20,8 @@ type State struct {
 	LastAttemptedCommit string    `json:"lastAttemptedCommit"`
 	LastComposeHash     string    `json:"lastComposeHash"`
 	LastStatus          string    `json:"lastStatus"`
+	LastError           string    `json:"lastError,omitempty"`
+	LastErrorAt         time.Time `json:"lastErrorAt,omitempty"`
 	Builds              []Build   `json:"builds"`
 	Updated             time.Time `json:"updated"`
 }
@@ -60,9 +62,13 @@ func (s *State) RecordAttempt(commit string) {
 	s.LastStatus = "building"
 }
 
-func (s *State) RecordFailure(commit string) {
+func (s *State) RecordFailure(commit string, err error) {
 	s.LastAttemptedCommit = commit
 	s.LastStatus = "failed"
+	if err != nil {
+		s.LastError = err.Error()
+		s.LastErrorAt = time.Now().UTC()
+	}
 }
 
 func (s *State) RecordRedeployAttempt(commit string) {
@@ -75,6 +81,8 @@ func (s *State) RecordRedeploySuccess(commit, composeHash string) {
 	s.LastDeployedCommit = commit
 	s.LastComposeHash = composeHash
 	s.LastStatus = "success"
+	s.LastError = ""
+	s.LastErrorAt = time.Time{}
 }
 
 func (s *State) RecordSuccess(commit, image, composeHash string, keep int) {
@@ -83,6 +91,8 @@ func (s *State) RecordSuccess(commit, image, composeHash string, keep int) {
 	s.LastSuccessfulImage = image
 	s.LastComposeHash = composeHash
 	s.LastStatus = "success"
+	s.LastError = ""
+	s.LastErrorAt = time.Time{}
 	s.Builds = append([]Build{{Commit: commit, Image: image, Deployed: time.Now().UTC()}}, s.Builds...)
 	seen := map[string]bool{}
 	unique := make([]Build, 0, len(s.Builds))

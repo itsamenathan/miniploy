@@ -25,7 +25,11 @@ type Config struct {
 	ComposeProfile     string
 	RedeployArgs       []string
 
+	HealthEnabled bool
+	HealthAddr    string
+
 	CheckInterval time.Duration
+	DeployDelay   time.Duration
 	KeepBuilds    int
 	DeployOnStart bool
 	DataDir       string
@@ -50,7 +54,10 @@ func Load() (Config, error) {
 		ComposeService:     os.Getenv("COMPOSE_SERVICE"),
 		ComposeProfile:     os.Getenv("COMPOSE_PROFILE"),
 		RedeployArgs:       fields(getenv("REDEPLOY_ARGS", "--no-deps --force-recreate")),
-		CheckInterval:      durationEnv("CHECK_INTERVAL", 30*time.Second),
+		HealthEnabled:      boolEnv("HEALTH_ENABLED", true),
+		HealthAddr:         getenv("HEALTH_ADDR", "127.0.0.1:8080"),
+		CheckInterval:      durationEnv("CHECK_INTERVAL", 5*time.Minute),
+		DeployDelay:        durationEnv("DEPLOY_DELAY", 0),
 		KeepBuilds:         intEnv("KEEP_BUILDS", 3),
 		DeployOnStart:      boolEnv("DEPLOY_ON_START", true),
 		DataDir:            dataDir,
@@ -81,8 +88,14 @@ func (c Config) Validate() error {
 	if c.GitAuthMode == "ssh" && c.GitSSHKeyPath == "" {
 		errs = append(errs, fmt.Errorf("GIT_SSH_KEY_PATH is required when GIT_AUTH_MODE=ssh"))
 	}
-	if c.CheckInterval <= 0 {
-		errs = append(errs, fmt.Errorf("CHECK_INTERVAL must be positive"))
+	if c.HealthEnabled && strings.TrimSpace(c.HealthAddr) == "" {
+		errs = append(errs, fmt.Errorf("HEALTH_ADDR is required when HEALTH_ENABLED=true"))
+	}
+	if c.CheckInterval < 0 {
+		errs = append(errs, fmt.Errorf("CHECK_INTERVAL must be zero or positive"))
+	}
+	if c.DeployDelay < 0 {
+		errs = append(errs, fmt.Errorf("DEPLOY_DELAY must be zero or positive"))
 	}
 	if c.KeepBuilds < 1 {
 		errs = append(errs, fmt.Errorf("KEEP_BUILDS must be at least 1"))
