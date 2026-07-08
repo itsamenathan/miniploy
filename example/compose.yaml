@@ -1,0 +1,40 @@
+name: miniploy-nginx-example
+
+services:
+  miniploy:
+    image: ghcr.io/itsamenathan/miniploy:latest
+    restart: unless-stopped
+    environment:
+      GIT_URL: https://gitlab.com/itsamenathan/miniploy.git
+      GIT_BRANCH: ${GIT_BRANCH:-main}
+      GIT_AUTH_MODE: none
+
+      IMAGE_NAME: miniploy-nginx-example:live
+      DOCKERFILE: example/Dockerfile
+      BUILD_CONTEXT: example
+
+      COMPOSE_PROJECT_NAME: miniploy-nginx-example
+      COMPOSE_SERVICE: nginx
+      COMPOSE_PROFILE: app
+
+      CHECK_INTERVAL: 30
+      KEEP_BUILDS: 2
+      DEPLOY_ON_START: true
+      DATA_DIR: /data
+      LOG_LEVEL: info
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/compose:ro
+      - miniploy-nginx-data:/data
+
+  nginx:
+    profiles:
+      - app
+    image: miniploy-nginx-example:live
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+
+volumes:
+  miniploy-nginx-data:

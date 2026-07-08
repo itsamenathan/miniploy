@@ -8,9 +8,16 @@ It clones a repo, checks the target branch for new commits, builds the repo Dock
 
 See:
 
+- `example/` for a complete self-contained nginx deployment
 - `compose.example.yml` for a generic template
 
-Start only miniploy initially:
+Run the included nginx example from the repo root:
+
+```bash
+docker compose -f example/compose.yaml up -d miniploy
+```
+
+For your own stack, start only miniploy initially:
 
 ```bash
 docker compose up -d miniploy
@@ -51,7 +58,7 @@ BuildKit is enabled for builds so Dockerfiles using `RUN --mount=type=cache` wor
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `COMPOSE_FILE` | no | `/compose/docker-compose.yml` | Compose file path inside the miniploy container. Usually mount your stack directory at `/compose`. |
+| `COMPOSE_FILE` | no | `/compose/compose.yaml` | Compose file path inside the miniploy container. Usually mount your stack directory at `/compose`. |
 | `COMPOSE_PROJECT_NAME` | yes | | Explicit Compose project name. Important to avoid duplicate stacks. |
 | `COMPOSE_SERVICE` | yes | | Service to recreate after a successful build. |
 | `COMPOSE_PROFILE` | no | | Compose profile to enable when validating/redeploying the service. Recommended for the managed app. |
@@ -65,10 +72,14 @@ services:
     volumes:
       - ./:/compose:ro
     environment:
-      COMPOSE_FILE: /compose/docker-compose.yml
+      COMPOSE_FILE: /compose/compose.yaml
 ```
 
-With that mount, a host file at `./docker-compose.yml` is visible inside miniploy as `/compose/docker-compose.yml`, which is why that is the default.
+With that mount, a host file at `./compose.yaml` is visible inside miniploy as `/compose/compose.yaml`, which is why that is the default. If your stack still uses `docker-compose.yml`, set `COMPOSE_FILE=/compose/docker-compose.yml` explicitly.
+
+Use full host paths for app service bind mounts, e.g. `/srv/my-app/app-data:/data`. Avoid relative bind mounts like `./app-data:/data` for services managed by miniploy.
+
+Docker Compose expands relative paths before it talks to the Docker daemon. Since Compose is running inside miniploy, `./app-data` is resolved using miniploy's filesystem, and the resulting absolute path is sent through the Docker socket to the host daemon. With the default `/compose` mount, Docker may receive `/compose/app-data:/data`; the host daemon interprets `/compose/app-data` as a host path, not as a path inside miniploy.
 
 Miniploy needs the Compose file because it does not manually create the app container. It lets Compose recreate the service so Compose remains responsible for ports, networks, volumes, environment variables, restart policies, and healthchecks.
 

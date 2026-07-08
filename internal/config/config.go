@@ -45,7 +45,7 @@ func Load() (Config, error) {
 		ImageName:          os.Getenv("IMAGE_NAME"),
 		Dockerfile:         getenv("DOCKERFILE", "Dockerfile"),
 		BuildContext:       getenv("BUILD_CONTEXT", "."),
-		ComposeFile:        getenv("COMPOSE_FILE", "/compose/docker-compose.yml"),
+		ComposeFile:        getenv("COMPOSE_FILE", "/compose/compose.yaml"),
 		ComposeProjectName: os.Getenv("COMPOSE_PROJECT_NAME"),
 		ComposeService:     os.Getenv("COMPOSE_SERVICE"),
 		ComposeProfile:     os.Getenv("COMPOSE_PROFILE"),

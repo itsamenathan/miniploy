@@ -10,7 +10,7 @@ services:
 
       IMAGE_NAME: private-app:live
 
-      COMPOSE_FILE: /compose/docker-compose.yml
+      COMPOSE_FILE: /compose/compose.yaml
       COMPOSE_PROJECT_NAME: my-stack
       COMPOSE_SERVICE: app
       COMPOSE_PROFILE: app
