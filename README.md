@@ -23,6 +23,15 @@ For your own stack, start only miniploy initially:
 docker compose up -d miniploy
 ```
 
+You can control the managed app through `miniployctl` from inside the miniploy container:
+
+```bash
+docker compose exec miniploy miniployctl status
+docker compose exec miniploy miniployctl logs -f
+docker compose exec miniploy miniployctl redeploy
+docker compose exec miniploy miniployctl rebuild
+```
+
 The managed app should live behind a Compose profile so first boot does not fail before the image exists:
 
 ```yaml
@@ -98,6 +107,24 @@ docker compose \
   --profile "$COMPOSE_PROFILE" \
   up -d $REDEPLOY_ARGS "$COMPOSE_SERVICE"
 ```
+
+## Controlling the deployed app
+
+The image includes `miniployctl`, a helper CLI that uses the same `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILE`, and `COMPOSE_SERVICE` environment variables as the miniploy daemon. Run it through `docker compose exec` so you do not need to remember the compose project name or service name:
+
+```bash
+docker compose exec miniploy miniployctl status
+docker compose exec miniploy miniployctl ps
+docker compose exec miniploy miniployctl logs -f
+docker compose exec miniploy miniployctl restart
+docker compose exec miniploy miniployctl stop
+docker compose exec miniploy miniployctl start
+docker compose exec miniploy miniployctl redeploy
+docker compose exec miniploy miniployctl rebuild
+docker compose exec miniploy miniployctl help
+```
+
+`miniployctl redeploy` recreates the managed service with `REDEPLOY_ARGS`; it does not rebuild the image. `miniployctl rebuild` fetches the watched Git branch, rebuilds the current remote commit, and recreates the managed service.
 
 ### Runtime/state
 

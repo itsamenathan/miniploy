@@ -27,10 +27,20 @@ If you are testing from a branch other than `main`, pass it explicitly:
 GIT_BRANCH=$(git branch --show-current) docker compose -f example/compose.yaml up -d miniploy
 ```
 
-View logs:
+View miniploy logs:
 
 ```bash
 docker compose -f example/compose.yaml logs -f miniploy
+```
+
+Control the deployed nginx service:
+
+```bash
+docker compose -f example/compose.yaml exec miniploy miniployctl help
+docker compose -f example/compose.yaml exec miniploy miniployctl status
+docker compose -f example/compose.yaml exec miniploy miniployctl logs -f
+docker compose -f example/compose.yaml exec miniploy miniployctl redeploy
+docker compose -f example/compose.yaml exec miniploy miniployctl rebuild
 ```
 
 Stop and remove the example stack:

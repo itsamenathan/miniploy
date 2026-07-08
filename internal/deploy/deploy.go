@@ -58,7 +58,23 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 			r.log.Warn("failed to release lock", "error", err)
 		}
 	}()
+	return r.run(ctx, reason, false)
+}
 
+func (r *Runner) Rebuild(ctx context.Context) error {
+	l, err := lock.Acquire(r.cfg.LockDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := l.Release(); err != nil && r.log != nil {
+			r.log.Warn("failed to release lock", "error", err)
+		}
+	}()
+	return r.run(ctx, "rebuild", true)
+}
+
+func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error {
 	st, err := state.Load(r.cfg.StatePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
@@ -80,12 +96,12 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 	commitChanged := remoteCommit != st.LastDeployedCommit
 	composeChanged := composeHash != st.LastComposeHash
 	startupEnsure := reason == "startup" && r.cfg.DeployOnStart
-	if !commitChanged && !composeChanged && !startupEnsure {
+	if !commitChanged && !composeChanged && !startupEnsure && !forceBuild {
 		r.log.Info("no changes detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 		return nil
 	}
 
-	if !commitChanged {
+	if !commitChanged && !forceBuild {
 		if composeChanged {
 			r.log.Info("compose file change detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash), "previous_compose_hash", shortHash(st.LastComposeHash))
 		} else {
@@ -111,7 +127,11 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		return nil
 	}
 
-	r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
+	if forceBuild {
+		r.log.Info("rebuild requested", "commit", docker.ShortCommit(remoteCommit), "compose_changed", composeChanged)
+	} else {
+		r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
+	}
 	st.RecordAttempt(remoteCommit)
 	_ = state.Save(r.cfg.StatePath, st)
 

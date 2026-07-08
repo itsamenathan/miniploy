@@ -42,6 +42,11 @@ func main() {
 	defer ticker.Stop()
 
 	logger.Info("miniploy started", "check_interval", cfg.CheckInterval.String())
+	logger.Info("managed compose service", "project", cfg.ComposeProjectName, "service", cfg.ComposeService, "compose_file", cfg.ComposeFile)
+	logger.Info("useful commands",
+		"status", "docker compose exec miniploy miniployctl status",
+		"logs", "docker compose exec miniploy miniployctl logs -f",
+		"redeploy", "docker compose exec miniploy miniployctl redeploy")
 	for {
 		select {
 		case <-ctx.Done():

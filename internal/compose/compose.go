@@ -21,15 +21,19 @@ func New(cfg config.Config, log *slog.Logger) Client {
 	return Client{cfg: cfg, run: runner.Runner{Log: log}, log: log}
 }
 
+func (c Client) Args(args ...string) []string {
+	base := []string{"compose", "-f", c.cfg.ComposeFile, "-p", c.cfg.ComposeProjectName}
+	if c.cfg.ComposeProfile != "" {
+		base = append(base, "--profile", c.cfg.ComposeProfile)
+	}
+	return append(base, args...)
+}
+
 func (c Client) Validate(ctx context.Context) error {
 	if _, err := os.Stat(c.cfg.ComposeFile); err != nil {
 		return err
 	}
-	args := []string{"compose", "-f", c.cfg.ComposeFile, "-p", c.cfg.ComposeProjectName}
-	if c.cfg.ComposeProfile != "" {
-		args = append(args, "--profile", c.cfg.ComposeProfile)
-	}
-	args = append(args, "config", "--services")
+	args := c.Args("config", "--services")
 	out, err := c.run.Output(ctx, "docker", args...)
 	if err != nil {
 		return err
@@ -43,13 +47,11 @@ func (c Client) Validate(ctx context.Context) error {
 }
 
 func (c Client) Up(ctx context.Context) error {
-	args := []string{"compose", "-f", c.cfg.ComposeFile, "-p", c.cfg.ComposeProjectName}
-	if c.cfg.ComposeProfile != "" {
-		args = append(args, "--profile", c.cfg.ComposeProfile)
-	}
-	args = append(args, "up", "-d")
+	args := c.Args("up", "-d")
 	args = append(args, c.cfg.RedeployArgs...)
 	args = append(args, c.cfg.ComposeService)
-	c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))
+	if c.log != nil {
+		c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))
+	}
 	return c.run.Run(ctx, "docker", args...)
 }
