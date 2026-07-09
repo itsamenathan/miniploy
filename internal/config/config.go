@@ -28,6 +28,11 @@ type Config struct {
 	HealthEnabled bool
 	HealthAddr    string
 
+	NotifyURLs      []string
+	NotifyOnSuccess bool
+	NotifyOnFailure bool
+	NotifyTitle     string
+
 	CheckInterval time.Duration
 	DeployDelay   time.Duration
 	KeepBuilds    int
@@ -56,6 +61,10 @@ func Load() (Config, error) {
 		RedeployArgs:       fields(getenv("REDEPLOY_ARGS", "--no-deps --force-recreate")),
 		HealthEnabled:      boolEnv("HEALTH_ENABLED", true),
 		HealthAddr:         getenv("HEALTH_ADDR", "127.0.0.1:8080"),
+		NotifyURLs:         listEnv("NOTIFY_URLS"),
+		NotifyOnSuccess:    notifyOn("success"),
+		NotifyOnFailure:    notifyOn("failure"),
+		NotifyTitle:        getenv("NOTIFY_TITLE", "miniploy"),
 		CheckInterval:      durationEnv("CHECK_INTERVAL", 5*time.Minute),
 		DeployDelay:        durationEnv("DEPLOY_DELAY", 0),
 		KeepBuilds:         intEnv("KEEP_BUILDS", 3),
@@ -99,6 +108,9 @@ func (c Config) Validate() error {
 	}
 	if c.KeepBuilds < 1 {
 		errs = append(errs, fmt.Errorf("KEEP_BUILDS must be at least 1"))
+	}
+	if len(c.NotifyURLs) > 0 && !c.NotifyOnSuccess && !c.NotifyOnFailure {
+		errs = append(errs, fmt.Errorf("NOTIFY_ON must include success, failure, or all when NOTIFY_URLS is set"))
 	}
 	return errors.Join(errs...)
 }
@@ -154,4 +166,27 @@ func fields(value string) []string {
 		return nil
 	}
 	return strings.Fields(value)
+}
+
+func listEnv(key string) []string {
+	value := strings.NewReplacer(",", "\n", "\r", "\n").Replace(os.Getenv(key))
+	values := strings.Fields(value)
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+func notifyOn(kind string) bool {
+	value := os.Getenv("NOTIFY_ON")
+	if strings.TrimSpace(value) == "" {
+		return kind == "failure"
+	}
+	for _, item := range listEnv("NOTIFY_ON") {
+		normalized := strings.ToLower(strings.TrimSpace(item))
+		if normalized == "all" || normalized == kind {
+			return true
+		}
+	}
+	return false
 }

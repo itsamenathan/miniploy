@@ -14,24 +14,27 @@ import (
 	"github.com/itsamenathan/miniploy/internal/docker"
 	"github.com/itsamenathan/miniploy/internal/git"
 	"github.com/itsamenathan/miniploy/internal/lock"
+	"github.com/itsamenathan/miniploy/internal/notify"
 	"github.com/itsamenathan/miniploy/internal/state"
 )
 
 type Runner struct {
-	cfg     config.Config
-	log     *slog.Logger
-	git     git.Client
-	docker  docker.Client
-	compose compose.Client
+	cfg      config.Config
+	log      *slog.Logger
+	git      git.Client
+	docker   docker.Client
+	compose  compose.Client
+	notifier *notify.Notifier
 }
 
 func New(cfg config.Config, log *slog.Logger) *Runner {
 	return &Runner{
-		cfg:     cfg,
-		log:     log,
-		git:     git.New(cfg, log),
-		docker:  docker.New(cfg, log),
-		compose: compose.New(cfg, log),
+		cfg:      cfg,
+		log:      log,
+		git:      git.New(cfg, log),
+		docker:   docker.New(cfg, log),
+		compose:  compose.New(cfg, log),
+		notifier: notify.New(cfg),
 	}
 }
 
@@ -44,6 +47,11 @@ func (r *Runner) Validate(ctx context.Context) error {
 	}
 	if err := r.compose.Validate(ctx); err != nil {
 		return fmt.Errorf("compose config invalid: %w", err)
+	}
+	if r.notifier != nil {
+		if err := r.notifier.Validate(); err != nil {
+			return fmt.Errorf("notification config invalid: %w", err)
+		}
 	}
 	return nil
 }
@@ -75,7 +83,14 @@ func (r *Runner) Rebuild(ctx context.Context) error {
 	return r.run(ctx, "rebuild", true)
 }
 
-func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error {
+func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err error) {
+	notifyCommit := ""
+	defer func() {
+		if err != nil {
+			r.notifyFailure(reason, notifyCommit, err)
+		}
+	}()
+
 	st, err := state.Load(r.cfg.StatePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
@@ -88,6 +103,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 	if err != nil {
 		return fmt.Errorf("check remote commit: %w", err)
 	}
+	notifyCommit = remoteCommit
 
 	composeHash, err := r.composeFileHash()
 	if err != nil {
@@ -126,6 +142,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 		if err := state.Save(r.cfg.StatePath, st); err != nil {
 			return fmt.Errorf("save state: %w", err)
 		}
+		r.notifySuccess(reason, remoteCommit, "", "redeploy successful")
 		r.log.Info("redeploy successful", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 		return nil
 	}
@@ -141,6 +158,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 			return err
 		}
 		remoteCommit = debouncedCommit
+		notifyCommit = remoteCommit
 		composeHash = debouncedComposeHash
 		if remoteCommit == st.LastDeployedCommit && composeHash == st.LastComposeHash {
 			r.log.Info("no changes detected after deploy delay", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
@@ -196,8 +214,43 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) error 
 	if err := r.docker.Cleanup(ctx, st); err != nil {
 		r.log.Warn("cleanup failed", "error", err)
 	}
+	r.notifySuccess(reason, remoteCommit, commitImage, "deploy successful")
 	r.log.Info("deploy successful", "commit", docker.ShortCommit(remoteCommit), "image", commitImage)
 	return nil
+}
+
+func (r *Runner) notifySuccess(reason, commit, image, kind string) {
+	if r.notifier == nil || !r.notifier.Enabled() {
+		return
+	}
+	event := notify.Event{
+		Kind:    kind,
+		Reason:  reason,
+		Commit:  docker.ShortCommit(commit),
+		Image:   image,
+		Service: r.cfg.ComposeService,
+		Project: r.cfg.ComposeProjectName,
+	}
+	if err := r.notifier.Success(event); err != nil {
+		r.log.Warn("deployment notification failed", "event", kind, "error", err)
+	}
+}
+
+func (r *Runner) notifyFailure(reason, commit string, failure error) {
+	if r.notifier == nil || !r.notifier.Enabled() {
+		return
+	}
+	event := notify.Event{
+		Kind:    "deploy failed",
+		Reason:  reason,
+		Commit:  docker.ShortCommit(commit),
+		Service: r.cfg.ComposeService,
+		Project: r.cfg.ComposeProjectName,
+		Error:   failure,
+	}
+	if err := r.notifier.Failure(event); err != nil {
+		r.log.Warn("deployment notification failed", "event", "deploy failed", "error", err)
+	}
 }
 
 func (r *Runner) debounce(ctx context.Context, commit, composeHash string) (string, string, error) {

@@ -1,4 +1,9 @@
+<div align="center">
+  <img src="assets/miniploy-icon.png" alt="miniploy icon" width="160">
+
 # miniploy
+
+</div>
 
 `miniploy` is a small Go utility container for one Git repo -> one Docker image -> one Docker Compose service.
 
@@ -143,6 +148,34 @@ docker compose exec miniploy miniployctl help
 | `STATE_PATH` | no | `$DATA_DIR/state.json` | Deploy state file path. |
 | `LOCK_DIR` | no | `$DATA_DIR/deploy.lock` | Lock directory used to prevent overlapping deploys. |
 | `LOG_LEVEL` | no | `info` | Log level: `debug`, `info`, `warn`, or `error`. |
+
+### Deployment notifications
+
+Miniploy can send deployment notifications through [apprise-go](https://github.com/unraid/apprise-go), which supports Apprise-style notification URLs for services such as Discord, Slack, Telegram, ntfy, Gotify, Pushover, email, and many others.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `NOTIFY_URLS` | no | | Comma-, newline-, or whitespace-separated Apprise notification URLs. Leave empty to disable notifications. |
+| `NOTIFY_ON` | no | `failure` | Notification events to send. Supported values: `failure`, `success`, or `all`. Multiple values can be comma-, newline-, or whitespace-separated. |
+| `NOTIFY_TITLE` | no | `miniploy` | Source label appended to notification bodies. Event titles are generated automatically, such as `✅ Deploy Success` or `❌ Deploy Failed`. |
+
+Examples:
+
+```yaml
+environment:
+  NOTIFY_URLS: ntfy://ntfy.sh/my-miniploy-topic
+  NOTIFY_ON: failure,success
+```
+
+```yaml
+environment:
+  NOTIFY_URLS: |
+    discord://webhook_id/webhook_token
+    tgram://bot_token/chat_id
+  NOTIFY_ON: all
+```
+
+Notification delivery failures are logged as warnings and do not fail or roll back a deployment.
 
 `CHECK_INTERVAL` controls how often miniploy checks the watched Git branch's remote commit and the mounted Compose file hash. Polls use a small jitter of ±10% so multiple miniploy instances that start together do not keep checking at exactly the same time. Use `30s` when you want fast personal/dev updates, `1m`-`5m` for normal use, and `10m` or more when running many services. Set `CHECK_INTERVAL=0` for manual-only operation after startup; you can still run `miniployctl rebuild` or `miniployctl redeploy` on demand.
 
