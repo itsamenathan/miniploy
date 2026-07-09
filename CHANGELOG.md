@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- Add deployment notifications through apprise-go with `NOTIFY_URLS`, `NOTIFY_ON`, and `NOTIFY_TITLE` configuration.
+- Add success, redeploy success, and failure notification events with emoji-formatted titles and message bodies.
+- Add project icon to the README.
+
+### Changed
+
+- Bump the Go toolchain and Docker build image to Go 1.25 for apprise-go support.
+
 ## [0.1.0] - 2026-07-08
 
 ### Added
