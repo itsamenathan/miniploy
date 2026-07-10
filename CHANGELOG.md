@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Verify that a Compose service has a running container after `docker compose up -d` rather than reporting a successful redeploy when it exits immediately.
+- Reconcile stopped or removed managed services during unchanged polling cycles, and rebuild the stable image tag when it was removed before recreating the service.
+
 ## [0.3.0] - 2026-07-10
 
 ### Added

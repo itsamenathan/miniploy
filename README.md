@@ -171,6 +171,8 @@ Successful builds are also tagged with the first 12 characters of their Git comm
 
 Miniploy runs Docker Compose inside its own container. Avoid relative host bind mounts in the managed service, such as `./data:/data`: Docker resolves them from miniploy's `/compose` directory, then the host Docker daemon interprets that path on the host. Prefer full host paths, such as `/srv/my-app/data:/data`.
 
+After each `docker compose up -d`, miniploy verifies that the managed service has a running container. It records a deployment failure instead of reporting success if the container exits immediately. On later checks, it also recreates the service when it is absent or stopped, even when Git and Compose configuration are unchanged. If the stable `IMAGE_NAME` tag was removed, miniploy rebuilds it before recreating the service.
+
 ### Runtime and retention
 
 | Variable | Default | Description |

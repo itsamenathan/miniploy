@@ -25,6 +25,22 @@ func (c Client) Validate(ctx context.Context) error {
 	return c.run.Run(ctx, "docker", "version")
 }
 
+// ImageExists reports whether the configured stable image tag is available
+// locally. It is used before a no-change redeploy so miniploy can rebuild an
+// image that was removed outside of miniploy.
+func (c Client) ImageExists(ctx context.Context) (bool, error) {
+	out, err := c.run.Output(ctx, "docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", c.cfg.ImageName)
+	if err != nil {
+		return false, err
+	}
+	for _, image := range strings.Fields(out) {
+		if image == c.cfg.ImageName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (c Client) Build(ctx context.Context, commit string) (string, error) {
 	short := ShortCommit(commit)
 	commitImage := CommitImage(c.cfg.ImageName, short)

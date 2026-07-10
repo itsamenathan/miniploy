@@ -114,14 +114,35 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 	commitChanged := remoteCommit != st.LastDeployedCommit
 	composeChanged := composeHash != st.LastComposeHash
 	startupEnsure := reason == "startup" && r.cfg.DeployOnStart
+	serviceStopped := false
 	if !commitChanged && !composeChanged && !startupEnsure && !forceBuild {
-		r.log.Info("no changes detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
-		return nil
+		running, err := r.compose.Running(ctx)
+		if err != nil {
+			return r.recordFailure(st, remoteCommit, fmt.Errorf("check compose service status: %w", err))
+		}
+		serviceStopped = !running
+		if !serviceStopped {
+			r.log.Info("no changes detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+			return nil
+		}
+	}
+
+	if !commitChanged && !forceBuild && (composeChanged || startupEnsure || serviceStopped) {
+		imageExists, err := r.docker.ImageExists(ctx)
+		if err != nil {
+			return r.recordFailure(st, remoteCommit, fmt.Errorf("check deployed image: %w", err))
+		}
+		if !imageExists {
+			forceBuild = true
+			r.log.Warn("managed image is missing; rebuilding", "image", r.cfg.ImageName)
+		}
 	}
 
 	if !commitChanged && !forceBuild {
 		if composeChanged {
 			r.log.Info("compose file change detected", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash), "previous_compose_hash", shortHash(st.LastComposeHash))
+		} else if serviceStopped {
+			r.log.Warn("managed service is not running; redeploying", "service", r.cfg.ComposeService, "project", r.cfg.ComposeProjectName)
 		} else {
 			r.log.Info("ensuring service is running on startup", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 		}

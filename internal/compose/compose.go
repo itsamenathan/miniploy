@@ -68,5 +68,41 @@ func (c Client) Up(ctx context.Context) error {
 	if c.log != nil {
 		c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))
 	}
-	return c.run.Run(ctx, "docker", args...)
+	if err := c.run.Run(ctx, "docker", args...); err != nil {
+		return err
+	}
+	if err := c.RequireRunning(ctx); err != nil {
+		return fmt.Errorf("verify compose service started: %w", err)
+	}
+	return nil
+}
+
+// RequireRunning reports an error unless Compose has a running container for
+// the managed service. `docker compose up -d` can return successfully even
+// when the container exits immediately, so a successful command alone is not
+// a successful deployment.
+func (c Client) RequireRunning(ctx context.Context) error {
+	running, err := c.Running(ctx)
+	if err != nil {
+		return err
+	}
+	if !running {
+		return fmt.Errorf("compose service %q has no running containers", c.cfg.ComposeService)
+	}
+	return nil
+}
+
+// Running reports whether Compose has a running container for the managed
+// service. It does not treat an absent or exited container as healthy.
+func (c Client) Running(ctx context.Context) (bool, error) {
+	out, err := c.run.Output(ctx, "docker", c.Args("ps", "--status", "running", "--services", c.cfg.ComposeService)...)
+	if err != nil {
+		return false, err
+	}
+	for _, service := range strings.Fields(out) {
+		if service == c.cfg.ComposeService {
+			return true, nil
+		}
+	}
+	return false, nil
 }
