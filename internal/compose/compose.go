@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,6 +45,20 @@ func (c Client) Validate(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("compose service %q not found in %s", c.cfg.ComposeService, c.cfg.ComposeFile)
+}
+
+// RenderedConfig returns Docker Compose's fully resolved configuration. It is
+// suitable for fingerprinting all Compose inputs that affect a deployment.
+func (c Client) RenderedConfig(ctx context.Context) (string, error) {
+	if _, err := os.Stat(c.cfg.ComposeFile); err != nil {
+		return "", err
+	}
+	return c.run.Output(ctx, "docker", c.Args("config")...)
+}
+
+func Hash(renderedConfig string) string {
+	sum := sha256.Sum256([]byte(renderedConfig))
+	return fmt.Sprintf("%x", sum)
 }
 
 func (c Client) Up(ctx context.Context) error {

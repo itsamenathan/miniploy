@@ -56,17 +56,12 @@ func TestLoadCheckIntervalNegativeInvalid(t *testing.T) {
 	}
 }
 
-func TestLoadCheckIntervalInvalidFallsBack(t *testing.T) {
+func TestLoadCheckIntervalInvalidFails(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("CHECK_INTERVAL", "not-a-duration")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.CheckInterval != 5*time.Minute {
-		t.Fatalf("CheckInterval = %v, want %v", cfg.CheckInterval, 5*time.Minute)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid CHECK_INTERVAL error")
 	}
 }
 
@@ -216,16 +211,21 @@ func TestLoadDeployDelay(t *testing.T) {
 	}
 }
 
-func TestLoadKeepBuildsInvalidFallsBack(t *testing.T) {
+func TestLoadKeepBuildsInvalidFails(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("KEEP_BUILDS", "not-an-int")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid KEEP_BUILDS error")
 	}
-	if cfg.KeepBuilds != 3 {
-		t.Fatalf("KeepBuilds = %d, want 3", cfg.KeepBuilds)
+}
+
+func TestLoadInvalidBooleanFails(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOY_ON_START", "sometimes")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid DEPLOY_ON_START error")
 	}
 }
 

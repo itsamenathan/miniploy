@@ -2,7 +2,7 @@ package deploy
 
 import (
 	"context"
-	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,12 +19,13 @@ import (
 )
 
 type Runner struct {
-	cfg      config.Config
-	log      *slog.Logger
-	git      git.Client
-	docker   docker.Client
-	compose  compose.Client
-	notifier *notify.Notifier
+	cfg        config.Config
+	log        *slog.Logger
+	git        git.Client
+	docker     docker.Client
+	compose    compose.Client
+	notifier   *notify.Notifier
+	stateSaver func(state.State) error
 }
 
 func New(cfg config.Config, log *slog.Logger) *Runner {
@@ -105,7 +106,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 	}
 	notifyCommit = remoteCommit
 
-	composeHash, err := r.composeFileHash()
+	composeHash, err := r.composeConfigHash(ctx)
 	if err != nil {
 		return fmt.Errorf("hash compose file: %w", err)
 	}
@@ -125,21 +126,17 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 			r.log.Info("ensuring service is running on startup", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 		}
 		st.RecordRedeployAttempt(remoteCommit)
-		_ = state.Save(r.cfg.StatePath, st)
+		if err := r.saveState(st); err != nil {
+			return fmt.Errorf("record redeploy attempt: %w", err)
+		}
 		if err := r.compose.Validate(ctx); err != nil {
-			failure := fmt.Errorf("compose config invalid: %w", err)
-			st.RecordFailure(remoteCommit, failure)
-			_ = state.Save(r.cfg.StatePath, st)
-			return failure
+			return r.recordFailure(st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
 		}
 		if err := r.compose.Up(ctx); err != nil {
-			failure := fmt.Errorf("redeploy compose service: %w", err)
-			st.RecordFailure(remoteCommit, failure)
-			_ = state.Save(r.cfg.StatePath, st)
-			return failure
+			return r.recordFailure(st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
 		}
 		st.RecordRedeploySuccess(remoteCommit, composeHash)
-		if err := state.Save(r.cfg.StatePath, st); err != nil {
+		if err := r.saveState(st); err != nil {
 			return fmt.Errorf("save state: %w", err)
 		}
 		r.notifySuccess(reason, remoteCommit, "", "redeploy successful")
@@ -153,9 +150,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 		r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
 		debouncedCommit, debouncedComposeHash, err := r.debounce(ctx, remoteCommit, composeHash)
 		if err != nil {
-			st.RecordFailure(remoteCommit, err)
-			_ = state.Save(r.cfg.StatePath, st)
-			return err
+			return r.recordFailure(st, remoteCommit, err)
 		}
 		remoteCommit = debouncedCommit
 		notifyCommit = remoteCommit
@@ -166,49 +161,34 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 		}
 	}
 	st.RecordAttempt(remoteCommit)
-	_ = state.Save(r.cfg.StatePath, st)
+	if err := r.saveState(st); err != nil {
+		return fmt.Errorf("record deploy attempt: %w", err)
+	}
 
 	if err := r.git.Checkout(ctx); err != nil {
-		failure := fmt.Errorf("checkout: %w", err)
-		st.RecordFailure(remoteCommit, failure)
-		_ = state.Save(r.cfg.StatePath, st)
-		return failure
+		return r.recordFailure(st, remoteCommit, fmt.Errorf("checkout: %w", err))
 	}
-	composeHash, err = r.composeFileHash()
+	composeHash, err = r.composeConfigHash(ctx)
 	if err != nil {
-		failure := fmt.Errorf("hash compose file: %w", err)
-		st.RecordFailure(remoteCommit, failure)
-		_ = state.Save(r.cfg.StatePath, st)
-		return failure
+		return r.recordFailure(st, remoteCommit, fmt.Errorf("hash compose config: %w", err))
 	}
 	if err := r.requireDockerfile(); err != nil {
-		st.RecordFailure(remoteCommit, err)
-		_ = state.Save(r.cfg.StatePath, st)
-		return err
+		return r.recordFailure(st, remoteCommit, err)
 	}
 
 	commitImage, err := r.docker.Build(ctx, remoteCommit)
 	if err != nil {
-		failure := fmt.Errorf("build image: %w", err)
-		st.RecordFailure(remoteCommit, failure)
-		_ = state.Save(r.cfg.StatePath, st)
-		return failure
+		return r.recordFailure(st, remoteCommit, fmt.Errorf("build image: %w", err))
 	}
 	if err := r.compose.Validate(ctx); err != nil {
-		failure := fmt.Errorf("compose config invalid: %w", err)
-		st.RecordFailure(remoteCommit, failure)
-		_ = state.Save(r.cfg.StatePath, st)
-		return failure
+		return r.recordFailure(st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
 	}
 	if err := r.compose.Up(ctx); err != nil {
-		failure := fmt.Errorf("redeploy compose service: %w", err)
-		st.RecordFailure(remoteCommit, failure)
-		_ = state.Save(r.cfg.StatePath, st)
-		return failure
+		return r.recordFailure(st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
 	}
 
 	st.RecordSuccess(remoteCommit, commitImage, composeHash, r.cfg.KeepBuilds)
-	if err := state.Save(r.cfg.StatePath, st); err != nil {
+	if err := r.saveState(st); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 	if err := r.docker.Cleanup(ctx, st); err != nil {
@@ -271,7 +251,7 @@ func (r *Runner) debounce(ctx context.Context, commit, composeHash string) (stri
 	if err != nil {
 		return "", "", fmt.Errorf("recheck remote commit after deploy delay: %w", err)
 	}
-	latestComposeHash, err := r.composeFileHash()
+	latestComposeHash, err := r.composeConfigHash(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("hash compose file after deploy delay: %w", err)
 	}
@@ -293,13 +273,27 @@ func (r *Runner) requireDockerfile() error {
 	return nil
 }
 
-func (r *Runner) composeFileHash() (string, error) {
-	contents, err := os.ReadFile(r.cfg.ComposeFile)
+func (r *Runner) composeConfigHash(ctx context.Context) (string, error) {
+	contents, err := r.compose.RenderedConfig(ctx)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(contents)
-	return fmt.Sprintf("%x", sum), nil
+	return compose.Hash(contents), nil
+}
+
+func (r *Runner) saveState(st state.State) error {
+	if r.stateSaver != nil {
+		return r.stateSaver(st)
+	}
+	return state.Save(r.cfg.StatePath, st)
+}
+
+func (r *Runner) recordFailure(st state.State, commit string, failure error) error {
+	st.RecordFailure(commit, failure)
+	if err := r.saveState(st); err != nil {
+		return errors.Join(failure, fmt.Errorf("record deploy failure: %w", err))
+	}
+	return failure
 }
 
 func shortHash(hash string) string {

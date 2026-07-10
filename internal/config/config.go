@@ -46,6 +46,12 @@ type Config struct {
 
 func Load() (Config, error) {
 	dataDir := getenv("DATA_DIR", "/data")
+	healthEnabled, healthErr := boolEnv("HEALTH_ENABLED", true)
+	checkInterval, checkIntervalErr := durationEnv("CHECK_INTERVAL", 5*time.Minute)
+	deployDelay, deployDelayErr := durationEnv("DEPLOY_DELAY", 0)
+	keepBuilds, keepBuildsErr := intEnv("KEEP_BUILDS", 3)
+	deployOnStart, deployOnStartErr := boolEnv("DEPLOY_ON_START", true)
+
 	cfg := Config{
 		GitURL:             os.Getenv("GIT_URL"),
 		GitBranch:          getenv("GIT_BRANCH", "main"),
@@ -59,23 +65,23 @@ func Load() (Config, error) {
 		ComposeService:     os.Getenv("COMPOSE_SERVICE"),
 		ComposeProfile:     os.Getenv("COMPOSE_PROFILE"),
 		RedeployArgs:       fields(getenv("REDEPLOY_ARGS", "--no-deps --force-recreate")),
-		HealthEnabled:      boolEnv("HEALTH_ENABLED", true),
+		HealthEnabled:      healthEnabled,
 		HealthAddr:         getenv("HEALTH_ADDR", "127.0.0.1:8080"),
 		NotifyURLs:         listEnv("NOTIFY_URLS"),
 		NotifyOnSuccess:    notifyOn("success"),
 		NotifyOnFailure:    notifyOn("failure"),
 		NotifyTitle:        getenv("NOTIFY_TITLE", "miniploy"),
-		CheckInterval:      durationEnv("CHECK_INTERVAL", 5*time.Minute),
-		DeployDelay:        durationEnv("DEPLOY_DELAY", 0),
-		KeepBuilds:         intEnv("KEEP_BUILDS", 3),
-		DeployOnStart:      boolEnv("DEPLOY_ON_START", true),
+		CheckInterval:      checkInterval,
+		DeployDelay:        deployDelay,
+		KeepBuilds:         keepBuilds,
+		DeployOnStart:      deployOnStart,
 		DataDir:            dataDir,
 		RepoDir:            getenv("REPO_DIR", dataDir+"/repo"),
 		StatePath:          getenv("STATE_PATH", dataDir+"/state.json"),
 		LockDir:            getenv("LOCK_DIR", dataDir+"/deploy.lock"),
 		LogLevel:           getenv("LOG_LEVEL", "info"),
 	}
-	return cfg, cfg.Validate()
+	return cfg, errors.Join(cfg.Validate(), healthErr, checkIntervalErr, deployDelayErr, keepBuildsErr, deployOnStartErr)
 }
 
 func (c Config) Validate() error {
@@ -122,43 +128,43 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func intEnv(key string, fallback int) int {
+func intEnv(key string, fallback int) (int, error) {
 	value := os.Getenv(key)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return fallback
+		return fallback, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func boolEnv(key string, fallback bool) bool {
+func boolEnv(key string, fallback bool) (bool, error) {
 	value := os.Getenv(key)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
-		return fallback
+		return fallback, fmt.Errorf("%s must be a boolean: %w", key, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func durationEnv(key string, fallback time.Duration) time.Duration {
+func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
 	value := os.Getenv(key)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	if seconds, err := strconv.Atoi(value); err == nil {
-		return time.Duration(seconds) * time.Second
+		return time.Duration(seconds) * time.Second, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return fallback
+		return fallback, fmt.Errorf("%s must be seconds or a Go duration: %w", key, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
 func fields(value string) []string {

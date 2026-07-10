@@ -22,7 +22,7 @@ services:
       LOG_LEVEL: info
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./:/compose
+      - ./:/compose:ro
       - miniploy-data:/data
     secrets:
       - git_ssh_key

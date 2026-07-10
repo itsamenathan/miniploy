@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add advisory deployment locking that is automatically released when miniploy exits, including compatibility with legacy lock directories.
+- Detect effective Docker Compose configuration changes by hashing rendered Compose configuration.
+- Add focused tests for Compose configuration hashing, deployment-state persistence failures, locking, command credential redaction, and invalid configuration.
+
+### Changed
+
+- Rewrite the README as an end-to-end operator guide with setup, configuration, operations, troubleshooting, health, notifications, and private-repository guidance.
+- Make the generic Compose template mount the Compose directory read-only.
+- Reject malformed supplied boolean, duration, and integer environment values during startup instead of silently using defaults.
+
+### Fixed
+
+- Surface state persistence failures while recording deployment attempts and deployment failures.
+- Redact HTTP(S) URL credentials from command errors and stop logging full command output to avoid exposing resolved Compose secrets.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added
