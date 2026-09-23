@@ -13,7 +13,7 @@ Miniploy is a small container that watches one Git repository, builds its Docker
 1. Checks the configured branch for a new commit.
 2. Clones or updates the repository in its persistent data volume.
 3. Builds the repository's Dockerfile and tags the image with both a stable tag (for example, `my-app:live`) and the commit SHA.
-4. Runs `docker compose up -d` for the service you selected.
+4. Runs `docker compose up -d --wait` for the service you selected. If the service has a health check, miniploy waits for it to become healthy.
 5. Repeats at the configured interval.
 
 It also redeploys when the **effective Docker Compose configuration** changes, even if the Git commit does not.
@@ -44,7 +44,7 @@ After the first deployment completes, open <http://localhost:8080>. See [`exampl
 
 ## Deploy your own application
 
-Start with [`compose.example.yml`](compose.example.yml). If you plan to build miniploy locally, clone this repository, rename that file to `compose.yaml` in the repository root, then edit the placeholders. If you keep your deployment Compose file elsewhere, use the published miniploy image described below instead of `build: .`.
+Copy [`compose.example.yml`](compose.example.yml) to `compose.yaml` in your deployment directory. It uses the published miniploy image and is configured for a public Git repository. Replace the placeholder `your-org/your-app` URL, image name, project name, and app port with your own values. To use a private repository, follow [Private repositories](#private-repositories).
 
 ### 1. Define the application service
 
@@ -60,7 +60,7 @@ services:
       - "8080:8080"
 ```
 
-Use the same `my-app:live` value for miniploy's `IMAGE_NAME` setting. Configure your app's networks, volumes, environment variables, health check, and ports here as usual.
+Use the same `my-app:live` value for miniploy's `IMAGE_NAME` setting. Miniploy checks this at startup. Configure your app's networks, volumes, environment variables, health check, and ports here as usual. A health check lets miniploy tell whether the app is ready to serve traffic.
 
 ### 2. Configure miniploy
 
@@ -68,16 +68,18 @@ Set these required values in the `miniploy` service:
 
 | Setting | Example | Purpose |
 | --- | --- | --- |
-| `GIT_URL` | `git@github.com:acme/my-app.git` | Repository to build. |
+| `GIT_URL` | `https://github.com/acme/my-app.git` | Repository to build. |
 | `IMAGE_NAME` | `my-app:live` | Stable image tag used by the app service. |
 | `COMPOSE_PROJECT_NAME` | `my-app` | A fixed Compose project name for this stack. |
 | `COMPOSE_SERVICE` | `app` | The service miniploy recreates after a build. |
 
-The generic template builds miniploy from the current directory. To use the published image instead, replace `build: .` with:
+The template uses the published image:
 
 ```yaml
 image: ghcr.io/itsamenathan/miniploy:latest
 ```
+
+You can pin this to a release tag for repeatable upgrades. To build miniploy from a local clone, replace `image:` with `build: .` and keep the Compose file at the repository root.
 
 Keep these mounts:
 
@@ -94,13 +96,7 @@ volumes:
 
 ### 3. Start miniploy
 
-Build it first if you kept `build: .` in the template:
-
-```bash
-docker compose build miniploy
-```
-
-Then start **only** miniploy:
+Start **only** miniploy:
 
 ```bash
 docker compose up -d miniploy
@@ -108,6 +104,8 @@ docker compose logs -f miniploy
 ```
 
 Miniploy builds the app image, then starts the profiled application service. Starting `app` yourself before the first build will fail because its image does not exist yet.
+
+Check the result with `docker compose exec miniploy miniployctl status`. The command shows the last deployment and the latest check separately. If a build is slow, `docker compose logs -f miniploy` shows its progress.
 
 ## Daily operations
 
@@ -128,9 +126,13 @@ docker compose exec miniploy miniployctl redeploy
 
 # Fetch the watched branch, rebuild, and recreate the app
 docker compose exec miniploy miniployctl rebuild
+
+# Pause automatic checks, then stop the app until you resume them
+docker compose exec miniploy miniployctl pause
+docker compose exec miniploy miniployctl stop
 ```
 
-Other available commands are `ps`, `restart`, `stop`, and `start`:
+When you are ready to deploy again, run `docker compose exec miniploy miniployctl resume`. The next automatic check runs at the configured interval. `stop` alone is temporary because the next automatic check restarts a stopped service. Pausing survives miniploy container restarts. Manual `rebuild` still works while paused. Other available commands are `ps`, `restart`, and `start`:
 
 ```bash
 docker compose exec miniploy miniployctl help
@@ -168,10 +170,11 @@ Successful builds are also tagged with the first 12 characters of their Git comm
 | `COMPOSE_SERVICE` | Yes | — | Service to recreate after a successful build. |
 | `COMPOSE_PROFILE` | No | — | Profile to enable when validating and starting the managed service. |
 | `REDEPLOY_ARGS` | No | `--no-deps --force-recreate` | Extra arguments passed to `docker compose up -d`. |
+| `DEPLOY_WAIT_TIMEOUT` | No | `60s` | Maximum time to wait for the app to run or become healthy. Use seconds (`90`) or a Go duration (`90s`). |
 
 Miniploy runs Docker Compose inside its own container. Avoid relative host bind mounts in the managed service, such as `./data:/data`: Docker resolves them from miniploy's `/compose` directory, then the host Docker daemon interprets that path on the host. Prefer full host paths, such as `/srv/my-app/data:/data`.
 
-After each `docker compose up -d`, miniploy verifies that the managed service has a running container. It records a deployment failure instead of reporting success if the container exits immediately. On later checks, it also recreates the service when it is absent or stopped, even when Git and Compose configuration are unchanged. If the stable `IMAGE_NAME` tag was removed, miniploy rebuilds it before recreating the service.
+After each `docker compose up -d --wait`, miniploy verifies that the managed service has a running container. With a Docker health check, Compose also waits for the service to become healthy. Miniploy records a failure if it exits or stays unhealthy beyond `DEPLOY_WAIT_TIMEOUT`. On later checks, it recreates the service when it is absent or stopped, even when Git and Compose configuration are unchanged. If the stable `IMAGE_NAME` tag was removed, miniploy rebuilds it before recreating the service.
 
 ### Runtime and retention
 
@@ -200,7 +203,7 @@ When enabled, miniploy exposes:
 - `GET /readyz` — readiness check; also verifies writable state plus Docker and Compose access.
 - `GET /status` — JSON configuration and last deployment status.
 
-The default address is private to the container. Bind and publish a different address only if external monitoring needs it.
+`/status` reports the latest check separately from the last deployment, so a Git or Compose check failure cannot leave the overall status showing success. It also reports whether automatic checks are paused. Git URL credentials are redacted. The default address is private to the container. If you publish it for external monitoring, restrict access through your network or reverse proxy because the endpoint does not require authentication and still shows deployment details.
 
 ### Notifications
 
@@ -234,6 +237,7 @@ secrets:
 services:
   miniploy:
     environment:
+      GIT_URL: git@github.com:your-org/private-app.git
       GIT_AUTH_MODE: ssh
       GIT_SSH_KEY_PATH: /run/secrets/git_ssh_key
     secrets:
@@ -248,6 +252,8 @@ If the mounted key's permissions are too broad for OpenSSH, miniploy copies it i
 | --- | --- |
 | Miniploy exits immediately | Run `docker compose logs miniploy`. Confirm all required variables are set and duration/boolean/integer values are valid. |
 | The app does not start on first boot | Confirm the app service has the configured `COMPOSE_PROFILE`, and start only `miniploy` initially. |
+| The app starts but deployment fails | Check its Docker health check and `DEPLOY_WAIT_TIMEOUT`, then inspect `miniployctl logs -f`. |
+| `IMAGE_NAME must match` appears | Use the exact same image tag in the app service's `image:` field and miniploy's `IMAGE_NAME`. |
 | A Git push does not deploy | Confirm `GIT_BRANCH`, wait for `CHECK_INTERVAL`, then inspect `docker compose logs -f miniploy`. Use `miniployctl rebuild` to force a build. |
 | Compose changes are ignored | Ensure miniploy can read the mounted Compose directory and that `COMPOSE_FILE` points to the correct container path. |
 | Git cannot access a private repository | Check deploy-key permissions, `GIT_AUTH_MODE=ssh`, and `GIT_SSH_KEY_PATH`. |

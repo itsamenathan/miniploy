@@ -3,10 +3,13 @@ package compose
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/itsamenathan/miniploy/internal/config"
 	"github.com/itsamenathan/miniploy/internal/runner"
@@ -34,17 +37,27 @@ func (c Client) Validate(ctx context.Context) error {
 	if _, err := os.Stat(c.cfg.ComposeFile); err != nil {
 		return err
 	}
-	args := c.Args("config", "--services")
+	args := c.Args("config", "--format", "json")
 	out, err := c.run.Output(ctx, "docker", args...)
 	if err != nil {
 		return err
 	}
-	for _, service := range strings.Fields(out) {
-		if service == c.cfg.ComposeService {
-			return nil
-		}
+	var rendered struct {
+		Services map[string]struct {
+			Image string `json:"image"`
+		} `json:"services"`
 	}
-	return fmt.Errorf("compose service %q not found in %s", c.cfg.ComposeService, c.cfg.ComposeFile)
+	if err := json.Unmarshal([]byte(out), &rendered); err != nil {
+		return fmt.Errorf("parse compose config: %w", err)
+	}
+	service, ok := rendered.Services[c.cfg.ComposeService]
+	if !ok {
+		return fmt.Errorf("compose service %q not found in %s", c.cfg.ComposeService, c.cfg.ComposeFile)
+	}
+	if service.Image != c.cfg.ImageName {
+		return fmt.Errorf("compose service %q uses image %q; IMAGE_NAME must match (currently %q)", c.cfg.ComposeService, service.Image, c.cfg.ImageName)
+	}
+	return nil
 }
 
 // RenderedConfig returns Docker Compose's fully resolved configuration. It is
@@ -64,6 +77,11 @@ func Hash(renderedConfig string) string {
 func (c Client) Up(ctx context.Context) error {
 	args := c.Args("up", "-d")
 	args = append(args, c.cfg.RedeployArgs...)
+	waitSeconds := int(c.cfg.DeployWaitTimeout / time.Second)
+	if c.cfg.DeployWaitTimeout%time.Second != 0 {
+		waitSeconds++
+	}
+	args = append(args, "--wait", "--wait-timeout", strconv.Itoa(waitSeconds))
 	args = append(args, c.cfg.ComposeService)
 	if c.log != nil {
 		c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))

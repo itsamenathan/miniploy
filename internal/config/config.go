@@ -33,15 +33,16 @@ type Config struct {
 	NotifyOnFailure bool
 	NotifyTitle     string
 
-	CheckInterval time.Duration
-	DeployDelay   time.Duration
-	KeepBuilds    int
-	DeployOnStart bool
-	DataDir       string
-	RepoDir       string
-	StatePath     string
-	LockDir       string
-	LogLevel      string
+	CheckInterval     time.Duration
+	DeployDelay       time.Duration
+	DeployWaitTimeout time.Duration
+	KeepBuilds        int
+	DeployOnStart     bool
+	DataDir           string
+	RepoDir           string
+	StatePath         string
+	LockDir           string
+	LogLevel          string
 }
 
 func Load() (Config, error) {
@@ -49,6 +50,7 @@ func Load() (Config, error) {
 	healthEnabled, healthErr := boolEnv("HEALTH_ENABLED", true)
 	checkInterval, checkIntervalErr := durationEnv("CHECK_INTERVAL", 5*time.Minute)
 	deployDelay, deployDelayErr := durationEnv("DEPLOY_DELAY", 0)
+	deployWaitTimeout, deployWaitTimeoutErr := durationEnv("DEPLOY_WAIT_TIMEOUT", 60*time.Second)
 	keepBuilds, keepBuildsErr := intEnv("KEEP_BUILDS", 3)
 	deployOnStart, deployOnStartErr := boolEnv("DEPLOY_ON_START", true)
 
@@ -73,6 +75,7 @@ func Load() (Config, error) {
 		NotifyTitle:        getenv("NOTIFY_TITLE", "miniploy"),
 		CheckInterval:      checkInterval,
 		DeployDelay:        deployDelay,
+		DeployWaitTimeout:  deployWaitTimeout,
 		KeepBuilds:         keepBuilds,
 		DeployOnStart:      deployOnStart,
 		DataDir:            dataDir,
@@ -81,7 +84,7 @@ func Load() (Config, error) {
 		LockDir:            getenv("LOCK_DIR", dataDir+"/deploy.lock"),
 		LogLevel:           getenv("LOG_LEVEL", "info"),
 	}
-	return cfg, errors.Join(cfg.Validate(), healthErr, checkIntervalErr, deployDelayErr, keepBuildsErr, deployOnStartErr)
+	return cfg, errors.Join(cfg.Validate(), healthErr, checkIntervalErr, deployDelayErr, deployWaitTimeoutErr, keepBuildsErr, deployOnStartErr)
 }
 
 func (c Config) Validate() error {
@@ -111,6 +114,9 @@ func (c Config) Validate() error {
 	}
 	if c.DeployDelay < 0 {
 		errs = append(errs, fmt.Errorf("DEPLOY_DELAY must be zero or positive"))
+	}
+	if c.DeployWaitTimeout < time.Second {
+		errs = append(errs, fmt.Errorf("DEPLOY_WAIT_TIMEOUT must be at least 1s"))
 	}
 	if c.KeepBuilds < 1 {
 		errs = append(errs, fmt.Errorf("KEEP_BUILDS must be at least 1"))

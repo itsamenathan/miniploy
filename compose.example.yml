@@ -1,36 +1,32 @@
 services:
   miniploy:
-    build: .
+    image: ghcr.io/itsamenathan/miniploy:latest
     restart: unless-stopped
     environment:
-      GIT_URL: git@github.com:your-org/private-app.git
+      GIT_URL: https://github.com/your-org/your-app.git
       GIT_BRANCH: main
-      GIT_AUTH_MODE: ssh
-      GIT_SSH_KEY_PATH: /run/secrets/git_ssh_key
+      GIT_AUTH_MODE: none
 
-      IMAGE_NAME: private-app:live
+      IMAGE_NAME: your-app:live
 
       COMPOSE_FILE: /compose/compose.yaml
-      COMPOSE_PROJECT_NAME: my-stack
+      COMPOSE_PROJECT_NAME: your-app
       COMPOSE_SERVICE: app
       COMPOSE_PROFILE: app
 
       CHECK_INTERVAL: 5m
       KEEP_BUILDS: 3
       DEPLOY_ON_START: true
-      DATA_DIR: /data
       LOG_LEVEL: info
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./:/compose:ro
       - miniploy-data:/data
-    secrets:
-      - git_ssh_key
 
   app:
     profiles:
       - app
-    image: private-app:live
+    image: your-app:live
     restart: unless-stopped
     networks:
       - app_net
@@ -43,7 +39,3 @@ networks:
 
 volumes:
   miniploy-data:
-
-secrets:
-  git_ssh_key:
-    file: ./deploy-key

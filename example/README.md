@@ -15,11 +15,11 @@ From the repo root:
 docker compose -f example/compose.yaml up -d miniploy
 ```
 
-Miniploy will pull `ghcr.io/itsamenathan/miniploy:latest`, clone `https://gitlab.com/itsamenathan/miniploy.git`, build `example/Dockerfile`, tag it as `miniploy-nginx-example:live`, then recreate the `nginx` service.
+Miniploy will pull `ghcr.io/itsamenathan/miniploy:latest`, clone `https://github.com/itsamenathan/miniploy.git`, build `example/Dockerfile`, tag it as `miniploy-nginx-example:live`, then recreate the `nginx` service.
 
 Open http://localhost:8080 after the deployment finishes.
 
-Because miniploy deploys Git commits, push changes before testing updates from GitLab.
+Because miniploy deploys Git commits, push changes before testing updates from GitHub.
 
 If you are testing from a branch other than `main`, pass it explicitly:
 

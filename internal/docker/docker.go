@@ -58,7 +58,7 @@ func (c Client) Build(ctx context.Context, commit string) (string, error) {
 		"--label", "miniploy.commit=" + commit,
 		contextPath,
 	}
-	return commitImage, c.run.Run(ctx, "docker", args...)
+	return commitImage, c.run.RunStreaming(ctx, "docker", args...)
 }
 
 func (c Client) Cleanup(ctx context.Context, st state.State) error {

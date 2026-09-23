@@ -211,6 +211,22 @@ func TestLoadDeployDelay(t *testing.T) {
 	}
 }
 
+func TestLoadDeployWaitTimeout(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOY_WAIT_TIMEOUT", "90s")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeployWaitTimeout != 90*time.Second {
+		t.Fatalf("DeployWaitTimeout = %v, want 90s", cfg.DeployWaitTimeout)
+	}
+	t.Setenv("DEPLOY_WAIT_TIMEOUT", "500ms")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted wait timeout shorter than one second")
+	}
+}
+
 func TestLoadKeepBuildsInvalidFails(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("KEEP_BUILDS", "not-an-int")

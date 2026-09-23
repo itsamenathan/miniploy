@@ -15,6 +15,7 @@ import (
 	"github.com/itsamenathan/miniploy/internal/git"
 	"github.com/itsamenathan/miniploy/internal/lock"
 	"github.com/itsamenathan/miniploy/internal/notify"
+	"github.com/itsamenathan/miniploy/internal/pause"
 	"github.com/itsamenathan/miniploy/internal/state"
 )
 
@@ -68,7 +69,15 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 			r.log.Warn("failed to release lock", "error", err)
 		}
 	}()
-	return r.run(ctx, reason, false)
+	paused, err := pause.IsPaused(r.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("check pause state: %w", err)
+	}
+	if paused {
+		r.log.Info("automatic deployment check skipped while paused", "reason", reason)
+		return nil
+	}
+	return r.runAndRecord(ctx, reason, false)
 }
 
 func (r *Runner) Rebuild(ctx context.Context) error {
@@ -81,7 +90,20 @@ func (r *Runner) Rebuild(ctx context.Context) error {
 			r.log.Warn("failed to release lock", "error", err)
 		}
 	}()
-	return r.run(ctx, "rebuild", true)
+	return r.runAndRecord(ctx, "rebuild", true)
+}
+
+func (r *Runner) runAndRecord(ctx context.Context, reason string, forceBuild bool) error {
+	runErr := r.run(ctx, reason, forceBuild)
+	st, loadErr := state.Load(r.cfg.StatePath)
+	if loadErr != nil {
+		return errors.Join(runErr, fmt.Errorf("load state to record check: %w", loadErr))
+	}
+	st.RecordCheck(runErr)
+	if saveErr := r.saveState(st); saveErr != nil {
+		return errors.Join(runErr, fmt.Errorf("record check result: %w", saveErr))
+	}
+	return runErr
 }
 
 func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err error) {
