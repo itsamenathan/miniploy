@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make the generic Compose template use a public repository URL placeholder and the published miniploy image.
 - Redact Git URL credentials and query parameters in CLI and HTTP status output.
+- Point the nginx example at this repository's public GitHub URL.
 
 ## [0.3.1] - 2026-07-10
 

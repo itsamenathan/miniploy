@@ -5,7 +5,7 @@ services:
     image: ghcr.io/itsamenathan/miniploy:latest
     restart: unless-stopped
     environment:
-      GIT_URL: https://gitlab.com/itsamenathan/miniploy.git
+      GIT_URL: https://github.com/itsamenathan/miniploy.git
       GIT_BRANCH: ${GIT_BRANCH:-main}
       GIT_AUTH_MODE: none
 
