@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/itsamenathan/miniploy/internal/config"
+	"github.com/itsamenathan/miniploy/internal/pause"
 	"github.com/itsamenathan/miniploy/internal/state"
 )
 
@@ -147,6 +149,49 @@ func TestStatus(t *testing.T) {
 	}
 	if response.State.LastDeployedCommit != st.LastDeployedCommit {
 		t.Fatalf("State.LastDeployedCommit = %q, want %q", response.State.LastDeployedCommit, st.LastDeployedCommit)
+	}
+}
+
+func TestStatusRedactsGitCredentialsAndReportsCheckFailure(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.GitURL = "https://user:secret@example.com/repo.git?token=private"
+	st := state.State{LastStatus: "success"}
+	st.RecordCheck(context.DeadlineExceeded)
+	if err := state.Save(cfg.StatePath, st); err != nil {
+		t.Fatal(err)
+	}
+	server := New(cfg, nil)
+	recorder := httptest.NewRecorder()
+	server.status(recorder, httptest.NewRequest(http.MethodGet, "/status", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "private") {
+		t.Fatalf("status leaked credentials: %s", recorder.Body.String())
+	}
+	var response statusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "failed" || response.State.LastStatus != "success" || response.State.LastCheckStatus != "failed" {
+		t.Fatalf("unexpected status response: %+v", response)
+	}
+}
+
+func TestStatusReportsPaused(t *testing.T) {
+	cfg := testConfig(t)
+	if err := pause.Set(cfg.DataDir, true); err != nil {
+		t.Fatal(err)
+	}
+	server := New(cfg, nil)
+	recorder := httptest.NewRecorder()
+	server.status(recorder, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var response statusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "paused" || !response.Paused {
+		t.Fatalf("status response = %+v, want paused", response)
 	}
 }
 

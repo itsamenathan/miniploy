@@ -22,8 +22,32 @@ type State struct {
 	LastStatus          string    `json:"lastStatus"`
 	LastError           string    `json:"lastError,omitempty"`
 	LastErrorAt         time.Time `json:"lastErrorAt,omitempty"`
+	LastCheckStatus     string    `json:"lastCheckStatus,omitempty"`
+	LastCheckError      string    `json:"lastCheckError,omitempty"`
+	LastCheckAt         time.Time `json:"lastCheckAt,omitempty"`
 	Builds              []Build   `json:"builds"`
 	Updated             time.Time `json:"updated"`
+}
+
+func (s *State) RecordCheck(err error) {
+	s.LastCheckAt = time.Now().UTC()
+	if err != nil {
+		s.LastCheckStatus = "failed"
+		s.LastCheckError = err.Error()
+		return
+	}
+	s.LastCheckStatus = "success"
+	s.LastCheckError = ""
+}
+
+func (s State) EffectiveStatus() string {
+	if s.LastCheckStatus == "failed" {
+		return "failed"
+	}
+	if s.LastStatus == "" {
+		return "unknown"
+	}
+	return s.LastStatus
 }
 
 func Load(path string) (State, error) {

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Validate that the managed Compose service uses `IMAGE_NAME` before building.
+- Track the latest check separately from the last deployment so Git and Compose errors appear in status.
+- Wait for the managed service to run or become healthy, with a configurable `DEPLOY_WAIT_TIMEOUT`.
+- Add persistent `miniployctl pause` and `resume` commands for automatic checks.
+- Stream build progress to miniploy logs with a bounded error tail.
+
+### Changed
+
+- Make the generic Compose template use a public repository URL placeholder and the published miniploy image.
+- Redact Git URL credentials and query parameters in CLI and HTTP status output.
+
 ## [0.3.1] - 2026-07-10
 
 ### Fixed

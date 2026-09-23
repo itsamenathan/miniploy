@@ -14,6 +14,8 @@ import (
 
 	"github.com/itsamenathan/miniploy/internal/config"
 	"github.com/itsamenathan/miniploy/internal/deploy"
+	"github.com/itsamenathan/miniploy/internal/pause"
+	"github.com/itsamenathan/miniploy/internal/redact"
 	"github.com/itsamenathan/miniploy/internal/state"
 )
 
@@ -29,6 +31,7 @@ type Server struct {
 
 type statusResponse struct {
 	Status  string        `json:"status"`
+	Paused  bool          `json:"paused"`
 	Git     gitStatus     `json:"git"`
 	Compose composeStatus `json:"compose"`
 	Polling pollingStatus `json:"polling"`
@@ -68,6 +71,9 @@ type stateSnapshot struct {
 	LastStatus          string    `json:"lastStatus,omitempty"`
 	LastError           string    `json:"lastError,omitempty"`
 	LastErrorAt         time.Time `json:"lastErrorAt,omitempty"`
+	LastCheckStatus     string    `json:"lastCheckStatus,omitempty"`
+	LastCheckError      string    `json:"lastCheckError,omitempty"`
+	LastCheckAt         time.Time `json:"lastCheckAt,omitempty"`
 	Updated             time.Time `json:"updated,omitempty"`
 }
 
@@ -150,15 +156,21 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": fmt.Sprintf("load state: %v", err)})
 		return
 	}
+	paused, err := pause.IsPaused(s.cfg.DataDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": fmt.Sprintf("read pause state: %v", err)})
+		return
+	}
 
-	lastStatus := st.LastStatus
-	if lastStatus == "" {
-		lastStatus = "unknown"
+	status := st.EffectiveStatus()
+	if paused {
+		status = "paused"
 	}
 	writeJSON(w, http.StatusOK, statusResponse{
-		Status: lastStatus,
+		Status: status,
+		Paused: paused,
 		Git: gitStatus{
-			URL:    s.cfg.GitURL,
+			URL:    redact.URL(s.cfg.GitURL),
 			Branch: s.cfg.GitBranch,
 		},
 		Compose: composeStatus{
@@ -178,8 +190,11 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 			LastAttemptedCommit: st.LastAttemptedCommit,
 			LastComposeHash:     st.LastComposeHash,
 			LastStatus:          st.LastStatus,
-			LastError:           st.LastError,
+			LastError:           redact.Text(st.LastError),
 			LastErrorAt:         st.LastErrorAt,
+			LastCheckStatus:     st.LastCheckStatus,
+			LastCheckError:      redact.Text(st.LastCheckError),
+			LastCheckAt:         st.LastCheckAt,
 			Updated:             st.Updated,
 		},
 		Health: healthStatus{
