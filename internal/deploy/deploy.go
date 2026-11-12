@@ -20,13 +20,14 @@ import (
 )
 
 type Runner struct {
-	cfg        config.Config
-	log        *slog.Logger
-	git        git.Client
-	docker     docker.Client
-	compose    compose.Client
-	notifier   *notify.Notifier
-	stateSaver func(state.State) error
+	cfg         config.Config
+	log         *slog.Logger
+	git         git.Client
+	docker      docker.Client
+	compose     compose.Client
+	notifier    *notify.Notifier
+	stateLoader func() (state.State, error)
+	stateSaver  func(state.State) error
 }
 
 func New(cfg config.Config, log *slog.Logger) *Runner {
@@ -64,11 +65,7 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		r.log.Warn("skipping run because lock is held", "reason", reason, "error", err)
 		return nil
 	}
-	defer func() {
-		if err := l.Release(); err != nil {
-			r.log.Warn("failed to release lock", "error", err)
-		}
-	}()
+	defer r.release(l)
 	paused, err := pause.IsPaused(r.cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("check pause state: %w", err)
@@ -77,7 +74,7 @@ func (r *Runner) RunOnce(ctx context.Context, reason string) error {
 		r.log.Info("automatic deployment check skipped while paused", "reason", reason)
 		return nil
 	}
-	return r.runAndRecord(ctx, reason, false)
+	return r.recordCheck(ctx, r.run(ctx, reason, false))
 }
 
 func (r *Runner) Rebuild(ctx context.Context) error {
@@ -85,36 +82,74 @@ func (r *Runner) Rebuild(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := l.Release(); err != nil && r.log != nil {
-			r.log.Warn("failed to release lock", "error", err)
-		}
-	}()
-	return r.runAndRecord(ctx, "rebuild", true)
+	defer r.release(l)
+	return r.recordCheck(ctx, r.run(ctx, "rebuild", true))
 }
 
-func (r *Runner) runAndRecord(ctx context.Context, reason string, forceBuild bool) error {
-	runErr := r.run(ctx, reason, forceBuild)
-	st, loadErr := state.Load(r.cfg.StatePath)
+// Redeploy recreates the managed service from the current image without
+// rebuilding. It holds the deploy lock and records the result in state.
+func (r *Runner) Redeploy(ctx context.Context) error {
+	l, err := lock.Acquire(r.cfg.LockDir)
+	if err != nil {
+		return err
+	}
+	defer r.release(l)
+	return r.recordCheck(ctx, r.redeploy(ctx))
+}
+
+func (r *Runner) release(l *lock.Lock) {
+	if err := l.Release(); err != nil && r.log != nil {
+		r.log.Warn("failed to release lock", "error", err)
+	}
+}
+
+// paused reports whether automatic deployments are paused. The pause marker
+// can be set at any time, including while a check is running, so automatic
+// checks call this again before each step that changes the running service.
+func (r *Runner) paused() bool {
+	paused, err := pause.IsPaused(r.cfg.DataDir)
+	if err != nil {
+		r.log.Warn("could not read pause state; treating automatic checks as paused", "error", err)
+		return true
+	}
+	return paused
+}
+
+// recordCheck stores the outcome of a check. A check that stopped because
+// miniploy is shutting down is recorded as interrupted, not failed.
+func (r *Runner) recordCheck(ctx context.Context, runErr error) error {
+	st, loadErr := r.loadState()
 	if loadErr != nil {
 		return errors.Join(runErr, fmt.Errorf("load state to record check: %w", loadErr))
 	}
-	st.RecordCheck(runErr)
+	if interrupted(ctx, runErr) {
+		st.RecordCheckInterrupted()
+	} else {
+		st.RecordCheck(runErr)
+	}
 	if saveErr := r.saveState(st); saveErr != nil {
 		return errors.Join(runErr, fmt.Errorf("record check result: %w", saveErr))
 	}
 	return runErr
 }
 
+// interrupted reports whether err happened because ctx was cancelled.
+// Commands killed by a cancelled context report their exit status rather
+// than context.Canceled, so the context itself is checked.
+func interrupted(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() != nil
+}
+
 func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err error) {
+	automatic := !forceBuild
 	notifyCommit := ""
 	defer func() {
-		if err != nil {
+		if err != nil && !interrupted(ctx, err) {
 			r.notifyFailure(reason, notifyCommit, err)
 		}
 	}()
 
-	st, err := state.Load(r.cfg.StatePath)
+	st, err := r.loadState()
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
@@ -135,12 +170,22 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 
 	commitChanged := remoteCommit != st.LastDeployedCommit
 	composeChanged := composeHash != st.LastComposeHash
+	if automatic && (commitChanged || composeChanged) && st.IsFailedDeploy(remoteCommit, composeHash) {
+		// The image for this target was already built and `compose up` failed.
+		// Compose does not roll back, so rebuilding and recreating it on every
+		// poll would only repeat the failure. Treat the target as current and
+		// only recreate the service if it stops.
+		r.log.Warn("skipping target whose last deploy failed; push a new commit, change the Compose configuration, or run miniployctl rebuild to retry",
+			"commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+		commitChanged = false
+		composeChanged = false
+	}
 	startupEnsure := reason == "startup" && r.cfg.DeployOnStart
 	serviceStopped := false
 	if !commitChanged && !composeChanged && !startupEnsure && !forceBuild {
 		running, err := r.compose.Running(ctx)
 		if err != nil {
-			return r.recordFailure(st, remoteCommit, fmt.Errorf("check compose service status: %w", err))
+			return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("check compose service status: %w", err))
 		}
 		serviceStopped = !running
 		if !serviceStopped {
@@ -152,7 +197,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 	if !commitChanged && !forceBuild && (composeChanged || startupEnsure || serviceStopped) {
 		imageExists, err := r.docker.ImageExists(ctx)
 		if err != nil {
-			return r.recordFailure(st, remoteCommit, fmt.Errorf("check deployed image: %w", err))
+			return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("check deployed image: %w", err))
 		}
 		if !imageExists {
 			forceBuild = true
@@ -173,12 +218,13 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 			return fmt.Errorf("record redeploy attempt: %w", err)
 		}
 		if err := r.compose.Validate(ctx); err != nil {
-			return r.recordFailure(st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
+			return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
 		}
 		if err := r.compose.Up(ctx); err != nil {
-			return r.recordFailure(st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
+			st.RecordFailedDeploy(remoteCommit, st.LastSuccessfulImage, composeHash)
+			return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
 		}
-		st.RecordRedeploySuccess(remoteCommit, composeHash)
+		r.recordRedeploySuccess(&st, remoteCommit, composeHash)
 		if err := r.saveState(st); err != nil {
 			return fmt.Errorf("save state: %w", err)
 		}
@@ -193,7 +239,7 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 		r.log.Info("change detected", "commit", docker.ShortCommit(remoteCommit), "previous", docker.ShortCommit(st.LastDeployedCommit), "compose_changed", composeChanged)
 		debouncedCommit, debouncedComposeHash, err := r.debounce(ctx, remoteCommit, composeHash)
 		if err != nil {
-			return r.recordFailure(st, remoteCommit, err)
+			return r.recordFailure(ctx, st, remoteCommit, err)
 		}
 		remoteCommit = debouncedCommit
 		notifyCommit = remoteCommit
@@ -202,32 +248,52 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 			r.log.Info("no changes detected after deploy delay", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
 			return nil
 		}
+		if automatic && st.IsFailedDeploy(remoteCommit, composeHash) {
+			r.log.Warn("skipping target whose last deploy failed", "commit", docker.ShortCommit(remoteCommit), "compose_hash", shortHash(composeHash))
+			return nil
+		}
 	}
+	if automatic && r.paused() {
+		r.log.Info("automatic deployments were paused; not deploying", "commit", docker.ShortCommit(remoteCommit))
+		return nil
+	}
+	previousStatus := st.LastStatus
 	st.RecordAttempt(remoteCommit)
 	if err := r.saveState(st); err != nil {
 		return fmt.Errorf("record deploy attempt: %w", err)
 	}
 
 	if err := r.git.Checkout(ctx); err != nil {
-		return r.recordFailure(st, remoteCommit, fmt.Errorf("checkout: %w", err))
+		return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("checkout: %w", err))
 	}
 	composeHash, err = r.composeConfigHash(ctx)
 	if err != nil {
-		return r.recordFailure(st, remoteCommit, fmt.Errorf("hash compose config: %w", err))
+		return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("hash compose config: %w", err))
 	}
 	if err := r.requireDockerfile(); err != nil {
-		return r.recordFailure(st, remoteCommit, err)
+		return r.recordFailure(ctx, st, remoteCommit, err)
+	}
+	// Validate before building so a Compose/IMAGE_NAME mismatch fails fast
+	// instead of after a full image build.
+	if err := r.compose.Validate(ctx); err != nil {
+		return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
 	}
 
 	commitImage, err := r.docker.Build(ctx, remoteCommit)
 	if err != nil {
-		return r.recordFailure(st, remoteCommit, fmt.Errorf("build image: %w", err))
+		return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("build image: %w", err))
 	}
-	if err := r.compose.Validate(ctx); err != nil {
-		return r.recordFailure(st, remoteCommit, fmt.Errorf("compose config invalid: %w", err))
+	if automatic && r.paused() {
+		st.RestoreStatus(previousStatus)
+		if err := r.saveState(st); err != nil {
+			return fmt.Errorf("save state: %w", err)
+		}
+		r.log.Info("automatic deployments were paused after the build; not recreating the service", "commit", docker.ShortCommit(remoteCommit), "image", commitImage)
+		return nil
 	}
 	if err := r.compose.Up(ctx); err != nil {
-		return r.recordFailure(st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
+		st.RecordFailedDeploy(remoteCommit, commitImage, composeHash)
+		return r.recordFailure(ctx, st, remoteCommit, fmt.Errorf("redeploy compose service: %w", err))
 	}
 
 	st.RecordSuccess(remoteCommit, commitImage, composeHash, r.cfg.KeepBuilds)
@@ -240,6 +306,58 @@ func (r *Runner) run(ctx context.Context, reason string, forceBuild bool) (err e
 	r.notifySuccess(reason, remoteCommit, commitImage, "deploy successful")
 	r.log.Info("deploy successful", "commit", docker.ShortCommit(remoteCommit), "image", commitImage)
 	return nil
+}
+
+// redeploy recreates the service from the current IMAGE_NAME tag.
+func (r *Runner) redeploy(ctx context.Context) (err error) {
+	const reason = "redeploy"
+	st, err := r.loadState()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+	// After a build whose `compose up` failed, IMAGE_NAME points at that build.
+	commit := st.LastDeployedCommit
+	if st.FailedDeployCommit != "" {
+		commit = st.FailedDeployCommit
+	}
+	defer func() {
+		if err != nil && !interrupted(ctx, err) {
+			r.notifyFailure(reason, commit, err)
+		}
+	}()
+
+	composeHash, err := r.composeConfigHash(ctx)
+	if err != nil {
+		return fmt.Errorf("hash compose file: %w", err)
+	}
+	st.RecordRedeployAttempt(commit)
+	if err := r.saveState(st); err != nil {
+		return fmt.Errorf("record redeploy attempt: %w", err)
+	}
+	if err := r.compose.Validate(ctx); err != nil {
+		return r.recordFailure(ctx, st, commit, fmt.Errorf("compose config invalid: %w", err))
+	}
+	if err := r.compose.Up(ctx); err != nil {
+		return r.recordFailure(ctx, st, commit, fmt.Errorf("redeploy compose service: %w", err))
+	}
+	r.recordRedeploySuccess(&st, commit, composeHash)
+	if err := r.saveState(st); err != nil {
+		return fmt.Errorf("save state: %w", err)
+	}
+	r.notifySuccess(reason, commit, "", "redeploy successful")
+	r.log.Info("redeploy successful", "commit", docker.ShortCommit(commit), "compose_hash", shortHash(composeHash))
+	return nil
+}
+
+// recordRedeploySuccess records a successful `compose up` without a build. If
+// it brought up an image whose earlier deploy failed, that build becomes the
+// deployed build so image cleanup keeps it.
+func (r *Runner) recordRedeploySuccess(st *state.State, commit, composeHash string) {
+	if st.FailedDeployCommit == commit && st.FailedDeployImage != "" && commit != st.LastDeployedCommit {
+		st.RecordSuccess(commit, st.FailedDeployImage, composeHash, r.cfg.KeepBuilds)
+		return
+	}
+	st.RecordRedeploySuccess(commit, composeHash)
 }
 
 func (r *Runner) notifySuccess(reason, commit, image, kind string) {
@@ -324,6 +442,13 @@ func (r *Runner) composeConfigHash(ctx context.Context) (string, error) {
 	return compose.Hash(contents), nil
 }
 
+func (r *Runner) loadState() (state.State, error) {
+	if r.stateLoader != nil {
+		return r.stateLoader()
+	}
+	return state.Load(r.cfg.StatePath)
+}
+
 func (r *Runner) saveState(st state.State) error {
 	if r.stateSaver != nil {
 		return r.stateSaver(st)
@@ -331,8 +456,12 @@ func (r *Runner) saveState(st state.State) error {
 	return state.Save(r.cfg.StatePath, st)
 }
 
-func (r *Runner) recordFailure(st state.State, commit string, failure error) error {
-	st.RecordFailure(commit, failure)
+func (r *Runner) recordFailure(ctx context.Context, st state.State, commit string, failure error) error {
+	if interrupted(ctx, failure) {
+		st.RecordInterrupted(commit)
+	} else {
+		st.RecordFailure(commit, failure)
+	}
 	if err := r.saveState(st); err != nil {
 		return errors.Join(failure, fmt.Errorf("record deploy failure: %w", err))
 	}

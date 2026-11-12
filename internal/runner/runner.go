@@ -23,8 +23,9 @@ func (r Runner) Run(ctx context.Context, name string, args ...string) error {
 	return err
 }
 
-// RunStreaming writes command progress to the logger and retains a bounded
-// tail for errors. Use it for builds, which can take a long time.
+// RunStreaming writes command progress to the logger and retains a short
+// tail for errors. Use it for long-running commands such as builds and
+// `compose up --wait`.
 func (r Runner) RunStreaming(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if r.Dir != "" {
@@ -42,19 +43,28 @@ func (r Runner) RunStreaming(ctx context.Context, name string, args ...string) e
 	err := cmd.Run()
 	output.flush()
 	if err != nil {
-		return fmt.Errorf("%s failed: %w: %s", commandString(name, args), err, output.tail)
+		if tail := output.Tail(); tail != "" {
+			return fmt.Errorf("%s failed: %w: %s", commandString(name, args), err, tail)
+		}
+		return fmt.Errorf("%s failed: %w", commandString(name, args), err)
 	}
 	return nil
 }
 
-const maxOutputTail = 32 * 1024
+// maxLineLength bounds a single buffered output line.
+const maxLineLength = 32 * 1024
+
+// maxErrorTail bounds the command output included in returned errors. Errors
+// end up in notifications, state.json, and /status, so they must stay small.
+const maxErrorTail = 2 * 1024
 
 type streamWriter struct {
 	mu          sync.Mutex
 	log         *slog.Logger
-	pending     string
+	pending     []byte
 	discardLine bool
-	tail        string
+	lines       []string
+	tailBytes   int
 }
 
 func (w *streamWriter) Write(p []byte) (int, error) {
@@ -69,9 +79,9 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 		}
 		w.appendSegment(p[:end])
 		if !w.discardLine {
-			w.emit(strings.TrimRight(w.pending, "\r"))
+			w.emit(strings.TrimRight(string(w.pending), "\r"))
 		}
-		w.pending = ""
+		w.pending = w.pending[:0]
 		w.discardLine = false
 		p = p[end+1:]
 	}
@@ -82,33 +92,57 @@ func (w *streamWriter) appendSegment(segment []byte) {
 	if w.discardLine {
 		return
 	}
-	if len(w.pending)+len(segment) > maxOutputTail {
-		w.emit("[build output line exceeded 32 KiB and was omitted]")
-		w.pending = ""
+	if len(w.pending)+len(segment) > maxLineLength {
+		w.emit("[command output line exceeded 32 KiB and was omitted]")
+		w.pending = w.pending[:0]
 		w.discardLine = true
 		return
 	}
-	w.pending += string(segment)
+	w.pending = append(w.pending, segment...)
 }
 
 func (w *streamWriter) flush() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.pending != "" && !w.discardLine {
-		w.emit(w.pending)
-		w.pending = ""
+	if len(w.pending) > 0 && !w.discardLine {
+		w.emit(string(w.pending))
+		w.pending = w.pending[:0]
 	}
 }
 
 func (w *streamWriter) emit(line string) {
 	line = redact.Text(line)
-	if w.log != nil && line != "" {
-		w.log.Info("build output", "line", line)
+	if line == "" {
+		return
 	}
-	w.tail += line + "\n"
-	if len(w.tail) > maxOutputTail {
-		w.tail = w.tail[len(w.tail)-maxOutputTail:]
+	if w.log != nil {
+		w.log.Info("command output", "line", line)
 	}
+	w.lines = append(w.lines, line)
+	w.tailBytes += len(line) + 1
+	drop := 0
+	for w.tailBytes > maxErrorTail && len(w.lines)-drop > 1 {
+		w.tailBytes -= len(w.lines[drop]) + 1
+		drop++
+	}
+	if drop > 0 {
+		// Copy forward so the backing array does not grow without bound.
+		n := copy(w.lines, w.lines[drop:])
+		clear(w.lines[n:])
+		w.lines = w.lines[:n]
+	}
+}
+
+// Tail returns the most recent output, at most maxErrorTail bytes of valid
+// UTF-8.
+func (w *streamWriter) Tail() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	tail := strings.Join(w.lines, "\n")
+	if len(tail) > maxErrorTail {
+		tail = strings.ToValidUTF8(tail[len(tail)-maxErrorTail:], "")
+	}
+	return tail
 }
 
 func (r Runner) Output(ctx context.Context, name string, args ...string) (string, error) {

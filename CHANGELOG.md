@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Validate that the managed Compose service uses `IMAGE_NAME` before building.
+- Validate that the managed Compose service uses `IMAGE_NAME` before building. Equivalent references such as `app`, `app:latest`, and `docker.io/library/app:latest` match.
 - Track the latest check separately from the last deployment so Git and Compose errors appear in status.
 - Wait for the managed service to run or become healthy, with a configurable `DEPLOY_WAIT_TIMEOUT`.
 - Add persistent `miniployctl pause` and `resume` commands for automatic checks.
@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make the generic Compose template use a public repository URL placeholder and the published miniploy image.
 - Redact Git URL credentials and query parameters in CLI and HTTP status output.
 - Point the nginx example at this repository's public GitHub URL.
+- `miniployctl pause` no longer waits for the deploy lock, and a running automatic check stops before recreating the service once paused.
+- `miniployctl redeploy` streams Compose output, holds the deploy lock, and records its result in state.
+- `miniployctl stop` explains whether the service will be restarted based on the pause state.
+- Report `updated` as the time of the last deployment state change rather than the last poll.
+
+### Fixed
+
+- Stop rebuilding and recreating the same commit on every check after `compose up --wait` fails or times out.
+- Keep failure notifications, persisted errors, and `/status` small by bounding command output included in errors.
+- Keep the streamed build output tail in constant memory and avoid splitting multi-byte characters.
+- Record checks stopped by a miniploy shutdown as `interrupted` instead of `failed`, without a failure notification.
 
 ## [0.3.1] - 2026-07-10
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/itsamenathan/miniploy/internal/redact"
 )
@@ -36,7 +37,7 @@ func TestRunStreamingLogsProgressAndRedactsFailure(t *testing.T) {
 func TestStreamWriterOmitsLongLines(t *testing.T) {
 	var logs bytes.Buffer
 	w := &streamWriter{log: slog.New(slog.NewTextHandler(&logs, nil))}
-	if _, err := w.Write([]byte(strings.Repeat("a", maxOutputTail) + "https://user:secret@example.com")); err != nil {
+	if _, err := w.Write([]byte(strings.Repeat("a", maxLineLength) + "https://user:secret@example.com")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Write([]byte("/repo.git\nnext line\n")); err != nil {
@@ -52,5 +53,24 @@ func TestRedactURLsRedactsCredentialsInCommandOutput(t *testing.T) {
 	want := "fatal: https://REDACTED@example.com/org/repo.git failed"
 	if got != want {
 		t.Fatalf("redactURLs() = %q, want %q", got, want)
+	}
+}
+
+func TestStreamWriterBoundsErrorTail(t *testing.T) {
+	w := &streamWriter{}
+	for i := 0; i < 10000; i++ {
+		if _, err := w.Write([]byte("line of build output é\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.Write([]byte("final line\n")); err != nil {
+		t.Fatal(err)
+	}
+	tail := w.Tail()
+	if len(tail) > maxErrorTail || !strings.HasSuffix(tail, "final line") || !utf8.ValidString(tail) {
+		t.Fatalf("tail length %d, suffix ok %t", len(tail), strings.HasSuffix(tail, "final line"))
+	}
+	if cap(w.lines) > 1000 {
+		t.Fatalf("line buffer grew to capacity %d", cap(w.lines))
 	}
 }

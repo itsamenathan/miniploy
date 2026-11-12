@@ -9,7 +9,12 @@ import (
 	apprise "github.com/unraid/apprise-go"
 
 	"github.com/itsamenathan/miniploy/internal/config"
+	"github.com/itsamenathan/miniploy/internal/state"
 )
+
+// maxErrorLength keeps failure notifications within the message size limits
+// of common targets such as Discord, Telegram, and ntfy.
+const maxErrorLength = 1000
 
 // Event describes a deployment notification event.
 type Event struct {
@@ -123,7 +128,7 @@ func (e Event) Body() string {
 	}
 	fmt.Fprintf(&b, "🕒 Date: %s\n", eventTime(e).Format("1/2/2006, 3:04:05 PM"))
 	if e.Error != nil {
-		fmt.Fprintf(&b, "\n🚨 Error:\n%s\n", e.Error.Error())
+		fmt.Fprintf(&b, "\n🚨 Error:\n%s\n", state.TruncateError(e.Error.Error(), maxErrorLength))
 	}
 	return strings.TrimSpace(b.String())
 }

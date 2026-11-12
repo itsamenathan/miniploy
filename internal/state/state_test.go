@@ -3,7 +3,9 @@ package state
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRecordFailureStoresError(t *testing.T) {
@@ -76,8 +78,40 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if loaded.LastDeployedCommit != original.LastDeployedCommit {
 		t.Fatalf("LastDeployedCommit = %q, want %q", loaded.LastDeployedCommit, original.LastDeployedCommit)
 	}
-	if loaded.Updated.IsZero() {
-		t.Fatal("Updated is zero, want timestamp")
+}
+
+func TestUpdatedTracksDeployChangesNotChecks(t *testing.T) {
+	var st State
+	st.RecordCheck(nil)
+	if !st.Updated.IsZero() {
+		t.Fatalf("RecordCheck changed Updated to %v", st.Updated)
+	}
+	st.RecordAttempt("abc123")
+	if st.Updated.IsZero() {
+		t.Fatal("RecordAttempt left Updated zero")
+	}
+}
+
+func TestTruncateErrorKeepsTail(t *testing.T) {
+	text := strings.Repeat("a", 100) + "é" + strings.Repeat("b", 10)
+	got := TruncateError(text, 30)
+	if len(got) > 30 || !strings.HasSuffix(got, "bbbbbbbbbb") || !utf8.ValidString(got) {
+		t.Fatalf("TruncateError() = %q", got)
+	}
+	if TruncateError("short", 30) != "short" {
+		t.Fatal("TruncateError changed short text")
+	}
+}
+
+func TestFailedDeployClearedOnSuccess(t *testing.T) {
+	var st State
+	st.RecordFailedDeploy("abc", "app:abc", "hash")
+	if !st.IsFailedDeploy("abc", "hash") || st.IsFailedDeploy("def", "hash") || st.IsFailedDeploy("abc", "other") {
+		t.Fatalf("IsFailedDeploy mismatch: %+v", st)
+	}
+	st.RecordRedeploySuccess("abc", "hash")
+	if st.IsFailedDeploy("abc", "hash") {
+		t.Fatal("failed deploy not cleared after success")
 	}
 }
 

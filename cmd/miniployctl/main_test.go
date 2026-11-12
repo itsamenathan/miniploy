@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/itsamenathan/miniploy/internal/config"
@@ -99,5 +100,14 @@ func TestHealthURL(t *testing.T) {
 				t.Fatalf("healthURL(%q) = %q, want %q", tt.addr, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStopMessageReflectsPauseState(t *testing.T) {
+	if msg := stopMessage(true); !strings.Contains(msg, "stays stopped") {
+		t.Fatalf("stopMessage(true) = %q", msg)
+	}
+	if msg := stopMessage(false); !strings.Contains(msg, "will restart") {
+		t.Fatalf("stopMessage(false) = %q", msg)
 	}
 }

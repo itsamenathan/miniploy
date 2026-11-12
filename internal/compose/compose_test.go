@@ -82,6 +82,43 @@ func TestValidateChecksManagedImage(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsEquivalentImageReferences(t *testing.T) {
+	client := testClient(t)
+	client.cfg.ComposeFile = filepath.Join(t.TempDir(), "compose.yaml")
+	if err := os.WriteFile(client.cfg.ComposeFile, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ composeImage, imageName string }{
+		{"docker.io/library/app:live", "app:live"},
+		{"app", "app:latest"},
+		{"docker.io/org/app", "org/app:latest"},
+	}
+	for _, tc := range cases {
+		client.cfg.ImageName = tc.imageName
+		t.Setenv("FAKE_DOCKER_CONFIG", `{"services":{"app":{"image":"`+tc.composeImage+`"}}}`)
+		if err := client.Validate(context.Background()); err != nil {
+			t.Fatalf("Validate(%q vs %q) error = %v", tc.composeImage, tc.imageName, err)
+		}
+	}
+}
+
+func TestNormalizeImage(t *testing.T) {
+	cases := map[string]string{
+		"app":                              "app:latest",
+		"app:live":                         "app:live",
+		"docker.io/library/app:live":       "app:live",
+		"registry.example.com:5000/app":    "registry.example.com:5000/app:latest",
+		"ghcr.io/org/app:v1":               "ghcr.io/org/app:v1",
+		"app@sha256:abc":                   "app@sha256:abc",
+		"registry.example.com/library/app": "registry.example.com/library/app:latest",
+	}
+	for in, want := range cases {
+		if got := NormalizeImage(in); got != want {
+			t.Errorf("NormalizeImage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestUpWaitsForAppHealth(t *testing.T) {
 	client := testClient(t)
 	client.cfg.DeployWaitTimeout = 60 * time.Second

@@ -14,7 +14,6 @@ import (
 	"github.com/itsamenathan/miniploy/internal/compose"
 	"github.com/itsamenathan/miniploy/internal/config"
 	"github.com/itsamenathan/miniploy/internal/deploy"
-	"github.com/itsamenathan/miniploy/internal/lock"
 	"github.com/itsamenathan/miniploy/internal/logging"
 	"github.com/itsamenathan/miniploy/internal/pause"
 	"github.com/itsamenathan/miniploy/internal/redact"
@@ -59,16 +58,18 @@ func run(ctx context.Context, args []string) error {
 		if err := docker(ctx, client.Args("stop", cfg.ComposeService)); err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stderr, "The next automatic check will restart this service. Run 'miniployctl pause' before stopping it to keep it stopped.")
+		paused, err := pause.IsPaused(cfg.DataDir)
+		if err != nil {
+			return fmt.Errorf("read pause state: %w", err)
+		}
+		fmt.Fprintln(os.Stderr, stopMessage(paused))
 		return nil
 	case "start":
 		return docker(ctx, client.Args("up", "-d", cfg.ComposeService))
 	case "redeploy":
-		return client.Up(ctx)
+		return deploy.New(cfg, logging.New(cfg.LogLevel)).Redeploy(ctx)
 	case "rebuild":
-		logger := logging.New(cfg.LogLevel)
-		runner := deploy.New(cfg, logger)
-		return runner.Rebuild(ctx)
+		return deploy.New(cfg, logging.New(cfg.LogLevel)).Rebuild(ctx)
 	case "pause":
 		return setPause(cfg, true)
 	case "resume":
@@ -79,20 +80,25 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
+func stopMessage(paused bool) string {
+	if paused {
+		return "Automatic checks are paused, so the service stays stopped. Run 'miniployctl start' to start it again."
+	}
+	return "The next automatic check will restart this service. Run 'miniployctl pause' before stopping it to keep it stopped."
+}
+
+// setPause does not take the deploy lock: creating or removing the marker is
+// atomic, and an operator must be able to pause while a deploy is running.
+// A running automatic check re-reads the marker before deploying.
 func setPause(cfg config.Config, paused bool) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return err
 	}
-	l, err := lock.Acquire(cfg.LockDir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = l.Release() }()
 	if err := pause.Set(cfg.DataDir, paused); err != nil {
 		return err
 	}
 	if paused {
-		fmt.Println("Automatic deployments paused. Manual rebuilds remain available.")
+		fmt.Println("Automatic deployments paused. A check already in progress stops before recreating the service. Manual rebuilds remain available.")
 	} else {
 		fmt.Println("Automatic deployments resumed. The next check runs at the configured interval.")
 	}
