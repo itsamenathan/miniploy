@@ -19,7 +19,7 @@ func TestRecordFailureReturnsPersistenceError(t *testing.T) {
 	persistenceErr := errors.New("disk full")
 	runner := Runner{stateSaver: func(state.State) error { return persistenceErr }}
 
-	err := runner.recordFailure(state.State{}, "abc123", failure)
+	err := runner.recordFailure(context.Background(), state.State{}, "abc123", failure)
 	if !errors.Is(err, failure) {
 		t.Fatalf("recordFailure() error = %v, want original failure", err)
 	}
@@ -65,5 +65,57 @@ func TestPausedRunSkipsAutomaticCheck(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.StatePath); !os.IsNotExist(err) {
 		t.Fatalf("paused check wrote deployment state: %v", err)
+	}
+}
+
+func TestCancelledCheckIsRecordedAsInterrupted(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{
+		DataDir:       dir,
+		StatePath:     filepath.Join(dir, "state.json"),
+		LockDir:       filepath.Join(dir, "deploy.lock"),
+		GitAuthMode:   "ssh",
+		GitSSHKeyPath: filepath.Join(dir, "missing-key"),
+	}
+	if err := state.Save(cfg.StatePath, state.State{LastStatus: "success", LastDeployedCommit: "abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := runner.RunOnce(ctx, "poll"); err == nil {
+		t.Fatal("RunOnce() succeeded with cancelled context")
+	}
+	st, err := state.Load(cfg.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastCheckStatus != "interrupted" || st.EffectiveStatus() != "success" {
+		t.Fatalf("state after cancelled check = %+v", st)
+	}
+}
+
+func TestRecordFailureDuringShutdownIsInterrupted(t *testing.T) {
+	var saved state.State
+	runner := Runner{stateSaver: func(st state.State) error { saved = st; return nil }}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = runner.recordFailure(ctx, state.State{LastStatus: "building"}, "abc123", errors.New("signal: killed"))
+	if saved.LastStatus != "interrupted" || saved.LastError != "" {
+		t.Fatalf("saved state = %+v, want interrupted without error", saved)
+	}
+}
+
+func TestRecordCheckUsesInjectedState(t *testing.T) {
+	var saved state.State
+	runner := Runner{
+		stateLoader: func() (state.State, error) { return state.State{LastDeployedCommit: "from-loader"}, nil },
+		stateSaver:  func(st state.State) error { saved = st; return nil },
+	}
+	if err := runner.recordCheck(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if saved.LastDeployedCommit != "from-loader" || saved.LastCheckStatus != "success" {
+		t.Fatalf("saved state = %+v", saved)
 	}
 }

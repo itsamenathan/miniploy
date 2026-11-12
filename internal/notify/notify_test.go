@@ -70,3 +70,10 @@ func TestEventBodyTrimsEmptyLines(t *testing.T) {
 		t.Fatalf("Body() = %q, want %q", body, "🕒 Date: 7/9/2026, 6:29:01 PM")
 	}
 }
+
+func TestBodyTruncatesLongErrors(t *testing.T) {
+	body := Event{Kind: "deploy failed", Error: errors.New(strings.Repeat("x", 40000) + "tail")}.Body()
+	if len(body) > 1500 || !strings.HasSuffix(body, "tail") {
+		t.Fatalf("body length = %d, want bounded with tail preserved", len(body))
+	}
+}

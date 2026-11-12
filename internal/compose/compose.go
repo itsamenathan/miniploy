@@ -54,10 +54,34 @@ func (c Client) Validate(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("compose service %q not found in %s", c.cfg.ComposeService, c.cfg.ComposeFile)
 	}
-	if service.Image != c.cfg.ImageName {
+	if NormalizeImage(service.Image) != NormalizeImage(c.cfg.ImageName) {
 		return fmt.Errorf("compose service %q uses image %q; IMAGE_NAME must match (currently %q)", c.cfg.ComposeService, service.Image, c.cfg.ImageName)
 	}
 	return nil
+}
+
+// NormalizeImage returns a canonical form of an image reference so that
+// equivalent references compare equal: an implicit ":latest" tag is added and
+// the default Docker Hub registry and "library/" namespace are removed.
+func NormalizeImage(ref string) string {
+	name := strings.TrimSpace(ref)
+	digest := ""
+	if i := strings.Index(name, "@"); i >= 0 {
+		name, digest = name[:i], name[i:]
+	}
+	if digest == "" && strings.LastIndex(name, ":") <= strings.LastIndex(name, "/") {
+		name += ":latest"
+	}
+	for _, registry := range []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"} {
+		if strings.HasPrefix(name, registry) {
+			name = strings.TrimPrefix(name, registry)
+			break
+		}
+	}
+	if rest, ok := strings.CutPrefix(name, "library/"); ok && !strings.Contains(rest, "/") {
+		name = rest
+	}
+	return name + digest
 }
 
 // RenderedConfig returns Docker Compose's fully resolved configuration. It is
@@ -86,7 +110,7 @@ func (c Client) Up(ctx context.Context) error {
 	if c.log != nil {
 		c.log.Info("redeploying compose service", "command", append([]string{"docker"}, args...))
 	}
-	if err := c.run.Run(ctx, "docker", args...); err != nil {
+	if err := c.run.RunStreaming(ctx, "docker", args...); err != nil {
 		return err
 	}
 	if err := c.RequireRunning(ctx); err != nil {

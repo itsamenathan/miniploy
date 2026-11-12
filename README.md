@@ -132,7 +132,7 @@ docker compose exec miniploy miniployctl pause
 docker compose exec miniploy miniployctl stop
 ```
 
-When you are ready to deploy again, run `docker compose exec miniploy miniployctl resume`. The next automatic check runs at the configured interval. `stop` alone is temporary because the next automatic check restarts a stopped service. Pausing survives miniploy container restarts. Manual `rebuild` still works while paused. Other available commands are `ps`, `restart`, and `start`:
+When you are ready to deploy again, run `docker compose exec miniploy miniployctl resume`. The next automatic check runs at the configured interval. `stop` alone is temporary because the next automatic check restarts a stopped service. Pausing survives miniploy container restarts and takes effect even while a check is running: an automatic deploy in progress stops before it recreates the service. Manual `rebuild` and `redeploy` still work while paused. Other available commands are `ps`, `restart`, and `start`:
 
 ```bash
 docker compose exec miniploy miniployctl help
@@ -174,7 +174,7 @@ Successful builds are also tagged with the first 12 characters of their Git comm
 
 Miniploy runs Docker Compose inside its own container. Avoid relative host bind mounts in the managed service, such as `./data:/data`: Docker resolves them from miniploy's `/compose` directory, then the host Docker daemon interprets that path on the host. Prefer full host paths, such as `/srv/my-app/data:/data`.
 
-After each `docker compose up -d --wait`, miniploy verifies that the managed service has a running container. With a Docker health check, Compose also waits for the service to become healthy. Miniploy records a failure if it exits or stays unhealthy beyond `DEPLOY_WAIT_TIMEOUT`. On later checks, it recreates the service when it is absent or stopped, even when Git and Compose configuration are unchanged. If the stable `IMAGE_NAME` tag was removed, miniploy rebuilds it before recreating the service.
+After each `docker compose up -d --wait`, miniploy verifies that the managed service has a running container. With a Docker health check, Compose also waits for the service to become healthy. Miniploy records a failure if it exits or stays unhealthy beyond `DEPLOY_WAIT_TIMEOUT`. Compose does not roll back, so the new container may keep running. Miniploy does not rebuild or recreate that same commit and Compose configuration on later checks; push a new commit, change the Compose configuration, or run `miniployctl rebuild` or `miniployctl redeploy` to try again. On later checks, it recreates the service when it is absent or stopped, even when Git and Compose configuration are unchanged. If the stable `IMAGE_NAME` tag was removed, miniploy rebuilds it before recreating the service.
 
 ### Runtime and retention
 
@@ -203,7 +203,7 @@ When enabled, miniploy exposes:
 - `GET /readyz` — readiness check; also verifies writable state plus Docker and Compose access.
 - `GET /status` — JSON configuration and last deployment status.
 
-`/status` reports the latest check separately from the last deployment, so a Git or Compose check failure cannot leave the overall status showing success. It also reports whether automatic checks are paused. Git URL credentials are redacted. The default address is private to the container. If you publish it for external monitoring, restrict access through your network or reverse proxy because the endpoint does not require authentication and still shows deployment details.
+`/status` reports the latest check separately from the last deployment, so a Git or Compose check failure cannot leave the overall status showing success. A check stopped by a miniploy shutdown is reported as `interrupted`, not `failed`, and is retried on the next check. `updated` is the time of the last deployment state change, not the last poll. It also reports whether automatic checks are paused. Git URL credentials are redacted. The default address is private to the container. If you publish it for external monitoring, restrict access through your network or reverse proxy because the endpoint does not require authentication and still shows deployment details.
 
 ### Notifications
 
